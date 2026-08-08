@@ -31,13 +31,14 @@ responsible for those parts.
 
 ## See TextUI in action
 
-![TextUI K9s demo showing a 10,000-row adaptive viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif)
+![TextUI btop demo showing responsive panels and live system data](docs/media/textui-btop.gif)
 
-More recordings cover
-[responsive text wrapping](docs/media/textui-wrapping.gif),
+The btop demo combines responsive panels, live data, interaction, and
+independently refreshed regions. More recordings cover
+[Flex layout](docs/media/textui-flex.gif),
 [Grid layout](docs/media/textui-grid.gif),
-[Lazygit-style panels](docs/media/textui-lazygit.gif), and the
-[live btop demo](docs/media/textui-btop.gif).
+[the 10,000-row K9s viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif),
+and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
 ## Load TextUI from a checkout
 
