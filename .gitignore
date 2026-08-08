@@ -1,0 +1,7 @@
+.DS_Store
+.omx/
+*.elc
+*~
+
+# Local announcement draft; README.md is the public project introduction.
+r-emacs-announcement.md

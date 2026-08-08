@@ -1,0 +1,443 @@
+# TextUI
+
+TextUI is a layout library for Emacs package authors who want to build
+interactive buffers without recalculating columns every time a window changes
+width.
+
+Your package keeps its state in ordinary Lisp values and supplies a render
+function. TextUI gives that function the available width, lays out the returned
+elements, creates native `widget.el` controls, and redraws the buffer when its
+width changes. It also restores point after a redraw and can replace a bounded
+region when rebuilding the whole interface would be wasteful.
+
+TextUI is a layout engine, not a component library. It provides Flex, Grid,
+width-aware text, image placement, and refresh mechanics. Buttons, editable
+fields, toggles, and package-defined widgets still belong to `widget.el`.
+
+TextUI requires Emacs 29.1 or newer and has no external runtime dependencies.
+
+## Is TextUI a fit for your package?
+
+TextUI is useful when your package needs a dashboard, inspector, settings
+screen, file browser, process monitor, or another interactive buffer that must
+adapt to different window widths. It is a particularly good fit when you want
+to keep using native Emacs widgets but do not want to calculate their positions
+by hand.
+
+TextUI does not manage window layouts, divide an application across several
+buffers, allocate height, fetch data, or own application state. It is also not
+intended to replace ordinary editable major modes. Your package remains
+responsible for those parts.
+
+## See TextUI in action
+
+![TextUI K9s demo showing a 10,000-row adaptive viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif)
+
+More recordings cover
+[responsive text wrapping](docs/media/textui-wrapping.gif),
+[Grid layout](docs/media/textui-grid.gif),
+[Lazygit-style panels](docs/media/textui-lazygit.gif), and the
+[live btop demo](docs/media/textui-btop.gif).
+
+## Load TextUI from a checkout
+
+Until TextUI is installed as a package, add its directory to `load-path`:
+
+```elisp
+(add-to-list 'load-path "/path/to/textui")
+(require 'textui)
+```
+
+Both `textui.el` and `textui-kp-core.el` must remain in that directory.
+
+## A first interface
+
+This is a complete counter owned by another package:
+
+```elisp
+(require 'textui)
+
+(defvar my-package-count 0)
+
+(defun my-package-dashboard--frame (_width)
+  `((:type :flex
+     :direction :row
+     :gap 2
+     :children
+     ((:type item
+       :format "%v"
+       :value ,(format "Count: %d" my-package-count))
+      (:type push-button
+       :value "Increment"
+       :layout (:focus-id increment)
+       :action ,(lambda (&rest _)
+                  (setq my-package-count (1+ my-package-count))))))))
+
+(defun my-package-dashboard ()
+  (interactive)
+  (textui-open "*My package*" #'my-package-dashboard--frame))
+```
+
+Evaluate the definitions and run `M-x my-package-dashboard`. The render
+function receives the current available width and returns a proper list of
+interface-element plists. The `push-button` is an ordinary `widget.el` control.
+After its `:action` returns, TextUI renders the frame once more and restores
+point to the button.
+
+The working model is small:
+
+```text
+your Lisp state + available width -> render function -> TextUI buffer
+```
+
+The render function is the evaluation boundary. Compute final property values
+there; TextUI does not add a binding language, component instances, or a virtual
+DOM.
+
+## Choose an element
+
+Every interface element is a plist with a `:type`.
+
+| Type             | Use it for                                                           |
+|------------------|----------------------------------------------------------------------|
+| `:flex`          | A responsive row or a vertical stack                                 |
+| `:grid`          | Equal-width tracks that reduce their column count when space shrinks |
+| `:text`          | Multi-line prose that reflows at its allocated pixel width           |
+| `:image`         | An Emacs-supported image fitted into a fixed number of text rows     |
+| Any other symbol | A registered package expander or a single-line `widget.el` type      |
+
+Keyword types belong to TextUI. Other symbols first look for an explicitly
+registered expander and otherwise go directly to `widget.el`.
+
+### Flex
+
+A row starts from each child's natural or declared width. It distributes spare
+space according to `:grow`, shrinks layout elements toward `:min-width`, and
+then wraps later children in source order:
+
+```elisp
+(:type :flex
+ :direction :row
+ :gap 1
+ :children
+ ((:type :flex
+   :direction :column
+   :border t
+   :padding 1
+   :layout (:width 24 :min-width 16 :grow 1)
+   :children (...))
+  (:type :flex
+   :direction :column
+   :border t
+   :padding 1
+   :layout (:width 24 :min-width 16 :grow 2)
+   :children (...))))
+```
+
+A column stacks its children and uses `:gap` blank lines between them. TextUI
+does not distribute vertical space.
+
+Options used by a parent belong under `:layout`:
+
+| Option        | Meaning                                                            |
+|---------------|--------------------------------------------------------------------|
+| `:width`      | Starting width in character cells                                  |
+| `:min-width`  | Smallest width a layout element may take before its flex row wraps |
+| `:grow`       | Non-negative weight for sharing spare width                        |
+| `:focus-id`   | Stable point-restoration identity supplied by your package         |
+| `:refresh-id` | Name of a replaceable complete-line column region                  |
+
+For a bordered or padded layout element, its allocated width includes the
+border and padding. Native widgets cannot use `:min-width` because TextUI cannot
+make their own presentation narrower.
+
+### Grid
+
+Grid places children into equal-width tracks in source order:
+
+```elisp
+(:type :grid
+ :columns 3
+ :min-column-width 26
+ :gap 1
+ :children (...))
+```
+
+`:columns` is the maximum column count. As the window narrows, Grid uses fewer
+columns before crossing `:min-column-width`. Each row takes the height of its
+tallest cell. TextUI v1 does not provide explicit track expressions or row and
+column spans.
+
+### Reflowing text
+
+Use `:text` for prose that must wrap. A native `item` remains one atomic line.
+
+```elisp
+(:type :text
+ :value "A paragraph that should follow the width of its card."
+ :layout (:min-width 24 :grow 1))
+```
+
+TextUI subtracts the parent's border and padding, converts the remaining cells
+to pixels, and applies its vendored Knuth–Plass core. Non-final lines distribute
+Latin, CJK/Latin, and CJK spacing to reach the content width. The last line of a
+paragraph remains naturally ragged-right. Source characters and source offsets
+are retained so point can follow the same text after reflow.
+
+The Knuth–Plass implementation in `textui-kp-core.el` is adapted from Kinney
+Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp). TextUI vendors the
+smaller subset it needs for pixel measurement, Latin/CJK boxing, kinsoku rules,
+line breaking, and glue allocation, so packages using TextUI do not need a
+separate `emacs-kp` installation.
+
+Give justified prose a reasonable minimum width. At very narrow widths,
+Knuth–Plass may need visibly wide word spacing or trailing glue to fill a line.
+That is valid output, but usually not pleasant reading. A package that supports
+such a narrow window should return a more compact frame or place the prose on a
+row of its own.
+
+### Images
+
+An image leaf fits a file supported by the running Emacs into an allocated
+width and a row count chosen by your package:
+
+```elisp
+(:type :image
+ :file "/path/to/preview.png"
+ :rows 12
+ :alt "preview.png"
+ :layout (:width 40 :min-width 12 :grow 1))
+```
+
+Graphical Emacs preserves the image's aspect ratio, centers it, and does not
+enlarge it beyond its source size. TextUI presents the image as horizontal
+slices so one buffer line does not become taller than its Flex or Grid
+siblings. A non-graphical Emacs displays `:alt`, or the file name, in a block
+with the same row count.
+
+The caller chooses `:rows`; TextUI does not allocate window height.
+
+## Use native and package-defined widgets
+
+An ordinary non-keyword type is passed to `widget.el`:
+
+```elisp
+(:type editable-field
+ :format "%v"
+ :size 20
+ :value "Ada"
+ :layout (:focus-id package-name)
+ :notify (lambda (widget &rest _)
+           (setq my-package-name (widget-value widget))))
+```
+
+Native widgets must produce exactly one logical line during measurement and the
+real presentation must have the same width. TextUI can move or pad an atomic
+widget, but it cannot shorten its label, editable area, or image glyph. See
+[`docs/widget-compatibility.md`](docs/widget-compatibility.md) for the tested
+sample of built-in and package-owned widgets.
+
+A widget's `:action` causes one automatic full refresh after a normal return.
+`widget.el` owns `:notify`; TextUI does not refresh implicitly after it. Call
+`textui-refresh` yourself if a `:notify` callback changes other visible content
+that must update immediately.
+
+## Decide how to refresh
+
+Your package owns its state and data sources. Change that state first, then
+choose the smallest refresh that matches the change.
+
+| Change source                                               | What to call                                            |
+|-------------------------------------------------------------|---------------------------------------------------------|
+| Native widget `:action`                                     | Nothing; TextUI performs one full refresh automatically |
+| Timer, process filter, sentinel, or subscription            | `textui-refresh`                                        |
+| One complete-line column changed during the current command | `textui-refresh-region`                                 |
+| Frequent external updates to one complete-line column       | `textui-request-refresh-region`                         |
+
+### Full refresh
+
+Keep the buffer returned by `textui-open` and refresh it after external state
+changes:
+
+```elisp
+(defvar my-package-buffer nil)
+
+(setq my-package-buffer
+      (textui-open "*My package*" #'my-package-dashboard--frame))
+
+;; Later, after a timer or process callback updates package state:
+(textui-refresh my-package-buffer)
+```
+
+`textui-open` reuses one stable TextUI buffer with the requested name. It
+signals an error rather than taking over an existing non-TextUI buffer.
+
+### Bounded refresh
+
+For a large or frequently changing panel, mark a column Flex container with a
+refresh ID:
+
+```elisp
+(:type :flex
+ :direction :column
+ :gap 0
+ :layout (:refresh-id rows)
+ :children (...))
+```
+
+Replace only that region at its current width:
+
+```elisp
+(textui-refresh-region
+ buffer 'rows
+ (lambda (content-width)
+   (render-visible-row-elements content-width)))
+```
+
+The producer returns the new children for the existing column. It should read
+state that your package has already loaded; database and process I/O do not
+belong inside the producer.
+
+A refresh region must occupy one continuous block of complete buffer lines. It
+cannot be a cell inside a Flex row or Grid because those lines also contain its
+siblings. Region refresh keeps the region's current width. Use a full refresh
+when surrounding layout or window width may have changed.
+
+When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
+the buffer has already changed and does not follow it with an automatic full
+refresh.
+
+For bursts from timers and process callbacks, request the refresh instead:
+
+```elisp
+(textui-request-refresh-region
+ buffer 'rows
+ (lambda (content-width)
+   (render-visible-row-elements content-width)))
+```
+
+Only the latest pending producer for the same buffer and ID is retained. TextUI
+runs it after the current command or refresh returns. A request becomes a no-op
+if a later full render removed the region.
+
+## Give your package its own element vocabulary
+
+A package can register a prefixed element type that expands into ordinary
+TextUI and `widget.el` elements:
+
+```elisp
+(textui-register-expander
+ 'my-package-badge
+ (lambda (element)
+   `((:type item
+      :format "%v"
+      :value ,(format "[%s]" (plist-get element :label))))))
+
+;; Later, inside a render function:
+(:type my-package-badge :label "Ready")
+```
+
+An expander is a pure function from one element plist to a proper list of zero
+or more elements. It receives no buffer or window and must not insert text or
+create widgets itself. Registering the same type again replaces the earlier
+function, which keeps normal Emacs re-evaluation workflows simple.
+
+Use your package prefix. Registrations are process-wide, and an explicit
+expander takes precedence if its symbol also names a `widget.el` type.
+
+## Point and resizing behavior
+
+TextUI refreshes when the usable width changes. If the same buffer appears in
+several windows, it uses the narrowest visible width because all of those
+windows share the same buffer text.
+
+Across a full refresh, TextUI follows the same source-order native element and
+its intra-element offset. Add a unique `:focus-id` when elements may be inserted,
+removed, or reordered. Point on reflowing text follows its source offset. Point
+on borders, gaps, and padding follows the same relative layout position when
+possible. Each live window also keeps the cursor on the same vertical screen
+row when the new content permits it.
+
+## Known boundaries
+
+- TextUI allocates width, not height.
+- One TextUI interface is one stable buffer. Your package may arrange several
+  buffers with normal Emacs windows, but TextUI does not own that application
+  shell.
+- Native widgets are atomic and single-line. If one widget is wider than a very
+  narrow window, Emacs decides whether to continue the line or scroll it.
+- A lone layout element may receive less than its declared `:min-width` when the
+  Emacs window itself is narrower. Return a compact frame when your interface
+  must work below that point.
+- Grid has equal tracks and no spans.
+- Refresh regions replace complete-line column blocks, not arbitrary text
+  ranges or interleaved cells.
+- TextUI reports invalid DSL, failed widget measurement, and refresh errors
+  directly. It does not replace a failed interface with an error page.
+
+## Run the examples
+
+The repository keeps two focused layout examples and four TUI-like capability
+demos. Run these commands from the repository root.
+
+Start with Flex and resize the frame:
+
+```sh
+emacs -Q -L . -l examples/textui-responsive-demo.el
+```
+
+The Grid gallery includes uneven cell heights, native controls, and
+package-owned widgets:
+
+```sh
+emacs -Q -L . -l examples/textui-grid-gallery.el
+```
+
+The larger demos are:
+
+```sh
+emacs -Q -L . -L examples -l examples/textui-k9s-local-refresh-prototype.el
+emacs -Q -L . -l examples/textui-lazygit-prototype.el
+emacs -Q -L . -l examples/textui-yazi-prototype.el
+emacs -Q -L . -l examples/textui-btop-prototype.el
+```
+
+- K9s renders a bounded viewport over 10,000 cached rows in one buffer.
+- Lazygit exercises linked panels, keyboard navigation, and focus modes.
+- Yazi exercises responsive three-pane navigation and native PNG preview.
+- btop is the closest demo to a practical application. On macOS it reads live
+  CPU, memory, network, disk, and process information through read-only system
+  commands and updates independent regions. Its sampler intentionally rejects
+  other operating systems because those commands are macOS-specific.
+
+These demos test the framework; they are not components shipped for reuse. The
+rule for extracting general capabilities from prototypes is recorded in
+[`ADR 0028`](docs/adr/0028-prototypes-extract-proven-layout-primitives.md).
+
+## Public functions
+
+| Function                                             | Purpose                                                 |
+|------------------------------------------------------|---------------------------------------------------------|
+| `(textui-open NAME RENDER-FUNCTION)`                 | Display or reuse a stable TextUI buffer and return it   |
+| `(textui-refresh BUFFER)`                            | Rebuild the complete frame synchronously                |
+| `(textui-refresh-region BUFFER ID PRODUCER)`         | Replace one named complete-line column immediately      |
+| `(textui-request-refresh-region BUFFER ID PRODUCER)` | Coalesce and defer external updates to one named column |
+| `(textui-register-expander TYPE FUNCTION)`           | Register or replace a package-owned DSL expander        |
+
+## Run the tests
+
+```sh
+emacs -Q --batch -L . -L examples -L test \
+  -l test/textui-test.el \
+  -l test/textui-grid-gallery-test.el \
+  -l test/textui-widget-compatibility-test.el \
+  -l test/textui-tui-app-test.el \
+  -f ert-run-tests-batch-and-exit
+```
+
+## License
+
+TextUI is released under GPL-3.0-or-later. See [`COPYING`](COPYING).
+
+The vendored Knuth–Plass core retains Kinney Zhang's copyright and is adapted
+from the GPL-3.0-licensed `emacs-kp` project credited above.
