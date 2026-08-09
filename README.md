@@ -25,9 +25,9 @@ to keep using native Emacs widgets but do not want to calculate their positions
 by hand.
 
 TextUI does not manage window layouts, divide an application across several
-buffers, allocate height, fetch data, or own application state. It is also not
-intended to replace ordinary editable major modes. Your package remains
-responsible for those parts.
+buffers, allocate height, fetch data, or prescribe a component/state model. It
+is also not intended to replace ordinary editable major modes. Your package
+remains responsible for those parts.
 
 ## See TextUI in action
 
@@ -58,8 +58,6 @@ This is a complete counter owned by another package:
 ```elisp
 (require 'textui)
 
-(defvar my-package-count 0)
-
 (defun my-package-dashboard--frame (_width)
   `((:type :flex
      :direction :row
@@ -67,23 +65,27 @@ This is a complete counter owned by another package:
      :children
      ((:type item
        :format "%v"
-       :value ,(format "Count: %d" my-package-count))
+       :value ,(format "Count: %d" (plist-get textui-state :count)))
       (:type push-button
        :value "Increment"
        :layout (:focus-id increment)
        :action ,(lambda (&rest _)
-                  (setq my-package-count (1+ my-package-count))))))))
+                  (textui-update
+                   (current-buffer)
+                   (lambda (state)
+                     (plist-put (copy-sequence state) :count
+                                (1+ (plist-get state :count)))))))))))
 
 (defun my-package-dashboard ()
   (interactive)
-  (textui-open "*My package*" #'my-package-dashboard--frame))
+  (textui-open "*My package*" #'my-package-dashboard--frame '(:count 0)))
 ```
 
 Evaluate the definitions and run `M-x my-package-dashboard`. The render
 function receives the current available width and returns a proper list of
 interface-element plists. The `push-button` is an ordinary `widget.el` control.
-After its `:action` returns, TextUI renders the frame once more and restores
-point to the button.
+Its `:action` updates the buffer state and queues one render; TextUI then
+restores point to the button.
 
 The working model is small:
 
@@ -94,6 +96,27 @@ your Lisp state + available width -> render function -> TextUI buffer
 The render function is the evaluation boundary. Compute final property values
 there; TextUI does not add a binding language, component instances, or a virtual
 DOM.
+
+## Keep buffer state and resources together
+
+`textui-state` is one ordinary buffer-local Lisp value. Supplying the optional
+third argument to `textui-open` installs its initial value before the first
+render. Calling `textui-open` later without that argument preserves the current
+state.
+
+`textui-update` passes the current value to an updater, stores its return value,
+and requests a full refresh. Several updates before Emacs processes its next
+timer event produce one refresh. If the updater signals an error, the old state
+is retained.
+
+This is deliberately smaller than a component system: TextUI does not provide
+component-local hooks, dependency tracking, or lifecycle phases. Register
+timers, processes, and subscriptions for cleanup when their buffer is killed:
+
+```elisp
+(textui-register-cleanup buffer
+                         (lambda () (cancel-timer package-timer)))
+```
 
 ## Choose an element
 
@@ -238,10 +261,10 @@ widget, but it cannot shorten its label, editable area, or image glyph. See
 [`docs/widget-compatibility.md`](docs/widget-compatibility.md) for the tested
 sample of built-in and package-owned widgets.
 
-A widget's `:action` causes one automatic full refresh after a normal return.
-`widget.el` owns `:notify`; TextUI does not refresh implicitly after it. Call
-`textui-refresh` yourself if a `:notify` callback changes other visible content
-that must update immediately.
+A widget's `:action` causes one automatic full refresh after a normal return,
+unless it already requested or performed a refresh. `widget.el` owns `:notify`;
+TextUI does not refresh implicitly after it. Call `textui-update` or a refresh
+function if a `:notify` callback changes other visible content.
 
 ## Decide how to refresh
 
@@ -250,9 +273,10 @@ choose the smallest refresh that matches the change.
 
 | Change source                                               | What to call                                            |
 |-------------------------------------------------------------|---------------------------------------------------------|
-| Native widget `:action`                                     | Nothing; TextUI performs one full refresh automatically |
-| Timer, process filter, sentinel, or subscription            | `textui-refresh`                                        |
-| One complete-line column changed during the current command | `textui-refresh-region`                                 |
+| `textui-state` changed                                      | `textui-update`                                         |
+| Native widget `:action` changed external state              | Nothing; TextUI performs one full refresh automatically |
+| External data changed across the frame                      | `textui-request-refresh`                                |
+| A complete-line column must change immediately              | `textui-refresh-region`                                 |
 | Frequent external updates to one complete-line column       | `textui-request-refresh-region`                         |
 
 ### Full refresh
@@ -267,11 +291,13 @@ changes:
       (textui-open "*My package*" #'my-package-dashboard--frame))
 
 ;; Later, after a timer or process callback updates package state:
-(textui-refresh my-package-buffer)
+(textui-request-refresh my-package-buffer)
 ```
 
 `textui-open` reuses one stable TextUI buffer with the requested name. It
 signals an error rather than taking over an existing non-TextUI buffer.
+`textui-request-refresh` combines a burst into one refresh on the next timer
+event; use `textui-refresh` when the rebuild must finish synchronously.
 
 ### Bounded refresh
 
@@ -307,6 +333,18 @@ when surrounding layout or window width may have changed.
 When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
 the buffer has already changed and does not follow it with an automatic full
 refresh.
+
+`textui-update` can request the same bounded refresh while changing state:
+
+```elisp
+(textui-update
+ buffer
+ (lambda (state)
+   (plist-put (copy-sequence state) :selected next-row))
+ :region 'rows
+ :producer (lambda (content-width)
+             (render-visible-row-elements content-width)))
+```
 
 For bursts from timers and process callbacks, request the refresh instead:
 
@@ -365,6 +403,8 @@ row when the new content permits it.
 - One TextUI interface is one stable buffer. Your package may arrange several
   buffers with normal Emacs windows, but TextUI does not own that application
   shell.
+- State is one buffer-local Lisp value. TextUI does not infer dependencies or
+  provide component-local state and lifecycle hooks.
 - Native widgets are atomic and single-line. If one widget is wider than a very
   narrow window, Emacs decides whether to continue the line or scroll it.
 - A lone layout element may receive less than its declared `:min-width` when the
@@ -417,13 +457,16 @@ rule for extracting general capabilities from prototypes is recorded in
 
 ## Public functions
 
-| Function                                             | Purpose                                                 |
-|------------------------------------------------------|---------------------------------------------------------|
-| `(textui-open NAME RENDER-FUNCTION)`                 | Display or reuse a stable TextUI buffer and return it   |
-| `(textui-refresh BUFFER)`                            | Rebuild the complete frame synchronously                |
-| `(textui-refresh-region BUFFER ID PRODUCER)`         | Replace one named complete-line column immediately      |
-| `(textui-request-refresh-region BUFFER ID PRODUCER)` | Coalesce and defer external updates to one named column |
-| `(textui-register-expander TYPE FUNCTION)`           | Register or replace a package-owned DSL expander        |
+| Function                                                    | Purpose                                                 |
+|-------------------------------------------------------------|---------------------------------------------------------|
+| `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
+| `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace buffer state and request one refresh            |
+| `(textui-request-refresh BUFFER)`                            | Coalesce and defer a complete-frame refresh             |
+| `(textui-refresh BUFFER)`                                    | Rebuild the complete frame synchronously                |
+| `(textui-refresh-region BUFFER ID PRODUCER)`                 | Replace one named complete-line column immediately      |
+| `(textui-request-refresh-region BUFFER ID PRODUCER)`         | Coalesce and defer external updates to one named column |
+| `(textui-register-cleanup BUFFER FUNCTION)`                  | Run a resource cleanup when the buffer is killed        |
+| `(textui-register-expander TYPE FUNCTION)`                   | Register or replace a package-owned DSL expander        |
 
 ## Run the tests
 

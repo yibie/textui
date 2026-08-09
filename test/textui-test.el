@@ -530,6 +530,107 @@
           (should (equal (buffer-string) "[1]")))
       (kill-buffer buffer))))
 
+(ert-deftest textui-update-coalesces-state-and-full-refresh ()
+  (let ((buffer (generate-new-buffer " *textui-state-test*"))
+        (renders 0)
+        (scheduled-count 0)
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 30
+                      textui-state '(:count 0)
+                      textui--render-function
+                      (lambda (_width)
+                        (setq renders (1+ renders))
+                        (list (list :type 'item :format "%v"
+                                    :value
+                                    (number-to-string
+                                     (plist-get textui-state :count))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled-count (1+ scheduled-count)
+                             scheduled (cons function arguments))
+                       'state-refresh-timer)))
+            (textui-update
+             buffer
+             (lambda (state)
+               (plist-put (copy-sequence state) :count 1)))
+            (textui-update
+             buffer
+             (lambda (state)
+               (plist-put (copy-sequence state) :count 2)))
+            (should (= (plist-get textui-state :count) 2))
+            (should (= scheduled-count 1))
+            (should (= renders 1))
+            (apply (car scheduled) (cdr scheduled))
+            (should (= renders 2))
+            (should (equal (buffer-string) "2"))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-action-respects-state-update-requested-refresh ()
+  (let ((buffer (generate-new-buffer " *textui-state-action-test*"))
+        (renders 0)
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 30
+                      textui-state '(:count 0)
+                      textui--render-function
+                      (lambda (_width)
+                        (setq renders (1+ renders))
+                        (list
+                         (list
+                          :type 'push-button
+                          :value (number-to-string
+                                  (plist-get textui-state :count))
+                          :action
+                          (lambda (&rest _)
+                            (textui-update
+                             buffer
+                             (lambda (state)
+                               (plist-put
+                                (copy-sequence state) :count
+                                (1+ (plist-get state :count))))))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'state-action-timer)))
+            (widget-apply-action (car textui--widgets))
+            (should (= renders 1))
+            (apply (car scheduled) (cdr scheduled))
+            (should (= renders 2))
+            (should (equal (buffer-string) "[1]"))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-update-keeps-state-when-updater-errors ()
+  (let ((buffer (generate-new-buffer " *textui-state-error-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui-state '(:value old))
+          (should-error
+           (textui-update buffer (lambda (_state) (error "Boom"))))
+          (should (equal textui-state '(:value old)))
+          (should-error
+           (textui-update buffer #'identity :region 'rows))
+          (should-not textui--refresh-timer))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-cleanup-runs-once-when-buffer-is-killed ()
+  (let ((buffer (generate-new-buffer " *textui-cleanup-test*"))
+        (calls 0))
+    (with-current-buffer buffer
+      (textui-mode)
+      (let ((cleanup (lambda () (setq calls (1+ calls)))))
+        (textui-register-cleanup buffer cleanup)
+        (textui-register-cleanup buffer cleanup)))
+    (kill-buffer buffer)
+    (should (= calls 1))))
+
 (ert-deftest textui-refresh-region-replaces-only-its-lines ()
   (let ((value "old")
         (renders 0)
@@ -1121,6 +1222,28 @@
             (with-current-buffer first
               (should (derived-mode-p 'textui-mode))
               (should (equal (buffer-string) "second")))))
+      (when (get-buffer name)
+        (kill-buffer name)))))
+
+(ert-deftest textui-open-installs-or-preserves-buffer-state ()
+  (let ((name "*textui-open-state-test*")
+        (render (lambda (_width)
+                  (list (list :type 'item :format "%v"
+                              :value (number-to-string
+                                      (plist-get textui-state :count)))))))
+    (unwind-protect
+        (save-window-excursion
+          (let ((buffer (textui-open name render '(:count 1))))
+            (with-current-buffer buffer
+              (should (equal (buffer-string) "1"))
+              (setq textui-state '(:count 2)))
+            (textui-open name render)
+            (with-current-buffer buffer
+              (should (equal textui-state '(:count 2)))
+              (should (equal (buffer-string) "2")))
+            (textui-open name render '(:count 3))
+            (with-current-buffer buffer
+              (should (equal (buffer-string) "3")))))
       (when (get-buffer name)
         (kill-buffer name)))))
 

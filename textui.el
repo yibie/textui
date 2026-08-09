@@ -26,8 +26,9 @@
 ;; TextUI lays out text and ordinary widget.el controls in responsive
 ;; Emacs buffers.
 ;; Its public surface is intentionally small: `textui-open',
-;; `textui-refresh', `textui-refresh-region',
-;; `textui-request-refresh-region', and
+;; `textui-update', `textui-refresh', `textui-request-refresh',
+;; `textui-refresh-region',
+;; `textui-request-refresh-region', `textui-register-cleanup', and
 ;; `textui-register-expander'.
 ;; A `:text' leaf wraps and pixel-justifies attributed text at the content
 ;; width assigned by its flex or grid parent:
@@ -77,12 +78,17 @@
 (defvar-local textui--refresh-regions nil)
 (defvar-local textui--region-refresh-requests nil)
 (defvar-local textui--region-refresh-timer nil)
+(defvar-local textui--refresh-timer nil)
+(defvar-local textui--cleanup-functions nil)
 (defvar-local textui--refresh-generation 0)
 (defvar-local textui--focus-before-command nil)
 (defvar-local textui--position-before-command nil)
 (defvar-local textui--pending-focus nil)
 (defvar-local textui--resize-cursor-timer nil)
 (defvar-local textui--cursor-type-before-resize nil)
+
+(defvar-local textui-state nil
+  "Application state owned by the current TextUI buffer.")
 
 (defun textui--proper-list-p (object)
   "Return non-nil when OBJECT is a finite proper list."
@@ -1039,7 +1045,12 @@ Keep existing widget and focus records when APPEND is non-nil."
                  (when (and (buffer-live-p target-buffer)
                             (= generation
                                (buffer-local-value
-                                'textui--refresh-generation target-buffer)))
+                                'textui--refresh-generation target-buffer))
+                            (not (buffer-local-value
+                                  'textui--refresh-timer target-buffer))
+                            (not (buffer-local-value
+                                  'textui--region-refresh-requests
+                                  target-buffer)))
                    (let ((textui--focus-override
                           (and this-command
                                (list textui--focus-before-command
@@ -1277,13 +1288,52 @@ FOCUS and POSITION describe point in the selected window."
     map)
   "Keymap for `textui-mode'.")
 
+(defun textui--dispose ()
+  "Cancel internal work and run cleanup functions for the current buffer."
+  (dolist (timer (list textui--refresh-timer
+                       textui--region-refresh-timer
+                       textui--resize-cursor-timer))
+    (when (timerp timer)
+      (cancel-timer timer)))
+  (setq textui--refresh-timer nil
+        textui--region-refresh-timer nil
+        textui--region-refresh-requests nil
+        textui--resize-cursor-timer nil)
+  (let ((cleanups textui--cleanup-functions)
+        first-error)
+    (setq textui--cleanup-functions nil)
+    (dolist (cleanup cleanups)
+      (condition-case error-data
+          (funcall cleanup)
+        (error
+         (unless first-error
+           (setq first-error error-data)))))
+    (when first-error
+      (signal (car first-error) (cdr first-error)))))
+
+;;;###autoload
+(defun textui-register-cleanup (buffer function)
+  "Run FUNCTION once when live TextUI BUFFER is killed.
+Registering the same function object more than once has no effect."
+  (if (not (buffer-live-p buffer))
+      nil
+    (unless (functionp function)
+      (error "Cleanup must be a function: %S" function))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'textui-mode)
+        (error "Not a TextUI buffer: %S" buffer))
+      (unless (memq function textui--cleanup-functions)
+        (push function textui--cleanup-functions))
+      function)))
+
 (define-derived-mode textui-mode special-mode "TextUI"
   "Major mode for TextUI-managed widget buffers."
   (setq buffer-read-only nil)
   (add-hook 'pre-command-hook #'textui--remember-focus nil t)
   (add-hook 'post-command-hook #'textui--restore-focus-after-command nil t)
   (add-hook 'window-configuration-change-hook
-            #'textui--maybe-refresh-for-width nil t))
+            #'textui--maybe-refresh-for-width nil t)
+  (add-hook 'kill-buffer-hook #'textui--dispose nil t))
 
 (defun textui--visible-width (buffer)
   "Return BUFFER's narrowest usable live window width, or nil."
@@ -1401,6 +1451,32 @@ FOCUS and POSITION describe point in the selected window."
           (when (assq (car request) textui--refresh-regions)
             (textui-refresh-region buffer (car request) (cdr request))))))))
 
+(defun textui--run-requested-refresh (buffer)
+  "Run a queued full refresh for live BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when textui--refresh-timer
+        (setq textui--refresh-timer nil)
+        (textui-refresh buffer)))))
+
+;;;###autoload
+(defun textui-request-refresh (buffer)
+  "Request one asynchronous full refresh of live TextUI BUFFER.
+Repeated pending requests are combined into one refresh."
+  (if (not (buffer-live-p buffer))
+      nil
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'textui-mode)
+        (error "Not a TextUI buffer: %S" buffer))
+      (when (timerp textui--region-refresh-timer)
+        (cancel-timer textui--region-refresh-timer))
+      (setq textui--region-refresh-timer nil
+            textui--region-refresh-requests nil)
+      (unless textui--refresh-timer
+        (setq textui--refresh-timer
+              (run-at-time 0 nil #'textui--run-requested-refresh buffer)))
+      buffer)))
+
 ;;;###autoload
 (defun textui-request-refresh-region (buffer id producer)
   "Request an asynchronous refresh of region ID in BUFFER.
@@ -1413,18 +1489,43 @@ pending requests for the same BUFFER and ID keep only the latest PRODUCER."
     (with-current-buffer buffer
       (unless (derived-mode-p 'textui-mode)
         (error "Not a TextUI buffer: %S" buffer))
-      (let ((region (assq id textui--refresh-regions))
-            (request (assq id textui--region-refresh-requests)))
+      (let ((region (assq id textui--refresh-regions)))
         (unless region
           (error "Unknown refresh region: %S" id))
-        (if request
-            (setcdr request producer)
-          (push (cons id producer) textui--region-refresh-requests))
-        (unless textui--region-refresh-timer
-          (setq textui--region-refresh-timer
-                (run-at-time 0 nil
-                             #'textui--run-requested-region-refreshes
-                             buffer))))
+        (unless textui--refresh-timer
+          (let ((request (assq id textui--region-refresh-requests)))
+            (if request
+                (setcdr request producer)
+              (push (cons id producer) textui--region-refresh-requests))
+            (unless textui--region-refresh-timer
+              (setq textui--region-refresh-timer
+                    (run-at-time 0 nil
+                                 #'textui--run-requested-region-refreshes
+                                 buffer))))))
+      buffer)))
+
+;;;###autoload
+(cl-defun textui-update (buffer updater &key region producer)
+  "Update live TextUI BUFFER state with UPDATER and request a refresh.
+UPDATER receives `textui-state' and returns its replacement.  With REGION,
+PRODUCER requests an existing refresh region instead of the full buffer."
+  (if (not (buffer-live-p buffer))
+      nil
+    (unless (functionp updater)
+      (error "State updater must be a function: %S" updater))
+    (when (and producer (not region))
+      (error "A region producer requires :region"))
+    (when (and region (not (functionp producer)))
+      (error "Region producer must be a function: %S" producer))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'textui-mode)
+        (error "Not a TextUI buffer: %S" buffer))
+      (when (and region (not (assq region textui--refresh-regions)))
+        (error "Unknown refresh region: %S" region))
+      (setq textui-state (funcall updater textui-state))
+      (if region
+          (textui-request-refresh-region buffer region producer)
+        (textui-request-refresh buffer))
       buffer)))
 
 ;;;###autoload
@@ -1530,6 +1631,13 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
         (error "Not a TextUI buffer: %S" buffer))
       (when textui--refreshing
         (error "Reentrant TextUI refresh: %S" buffer))
+      (dolist (timer (list textui--refresh-timer
+                           textui--region-refresh-timer))
+        (when (timerp timer)
+          (cancel-timer timer)))
+      (setq textui--refresh-timer nil
+            textui--region-refresh-timer nil
+            textui--region-refresh-requests nil)
       (let ((textui--refreshing t)
             (width (textui--available-width buffer))
             (textui--collect-refresh-regions t)
@@ -1565,8 +1673,10 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
       buffer)))
 
 ;;;###autoload
-(defun textui-open (name render-function)
-  "Display stable buffer NAME backed by RENDER-FUNCTION and return it."
+(cl-defun textui-open (name render-function
+                            &optional (initial-state nil state-supplied-p))
+  "Display stable buffer NAME backed by RENDER-FUNCTION and return it.
+When INITIAL-STATE is supplied, install it before the first refresh."
   (unless (stringp name)
     (error "TextUI buffer name must be a string: %S" name))
   (unless (functionp render-function)
@@ -1580,7 +1690,9 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
       (with-current-buffer buffer
         (unless (derived-mode-p 'textui-mode)
           (textui-mode))
-        (setq-local textui--render-function render-function))
+        (setq-local textui--render-function render-function)
+        (when state-supplied-p
+          (setq-local textui-state initial-state)))
       (unless (display-buffer buffer)
         (error "Could not display TextUI buffer %S" name))
       (textui-refresh buffer)

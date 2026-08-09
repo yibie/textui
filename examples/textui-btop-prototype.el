@@ -116,16 +116,25 @@
 (defvar-local textui-btop-prototype--sample-buffer nil)
 (defvar-local textui-btop-prototype--sample-started 0.0)
 (defvar-local textui-btop-prototype--last-sample-ms 0.0)
-(defvar-local textui-btop-prototype--boxes '(cpu mem net proc))
-(defvar-local textui-btop-prototype--process-index 0)
-(defvar-local textui-btop-prototype--sort-index 0)
-(defvar-local textui-btop-prototype--reversed nil)
-(defvar-local textui-btop-prototype--filter "")
-(defvar-local textui-btop-prototype--paused nil)
-(defvar-local textui-btop-prototype--details t)
 (defvar-local textui-btop-prototype--timer nil)
 (defvar-local textui-btop-prototype--last-height nil)
 (defvar-local textui-btop-prototype--face-cookie nil)
+
+(defconst textui-btop-prototype--initial-state
+  '(:boxes (cpu mem net proc)
+    :process-index 0 :sort-index 0 :reversed nil
+    :filter "" :paused nil :details t))
+
+(defun textui-btop-prototype--state (key)
+  "Return KEY from the current buffer's `textui-state'."
+  (plist-get textui-state key))
+
+(defun textui-btop-prototype--state-with (state &rest changes)
+  "Return a copy of STATE with alternating key/value CHANGES."
+  (let ((next (copy-sequence state)))
+    (while changes
+      (setq next (plist-put next (pop changes) (pop changes))))
+    next))
 
 (defun textui-btop-prototype--fit (string width)
   "Truncate and pad STRING to exactly WIDTH display cells."
@@ -176,7 +185,7 @@
 
 (defun textui-btop-prototype--box-visible-p (box)
   "Return non-nil when BOX is visible."
-  (memq box textui-btop-prototype--boxes))
+  (memq box (textui-btop-prototype--state :boxes)))
 
 (defun textui-btop-prototype--append-sample (history value)
   "Append VALUE to HISTORY and retain its newest 240 values."
@@ -320,7 +329,7 @@
                 textui-btop-prototype--sample-buffer nil)
           (if (/= status 0)
               (error "btop sampler exited with status %d" status)
-            (unless textui-btop-prototype--paused
+            (unless (textui-btop-prototype--state :paused)
               (let* ((vm-marker "\n__TEXTUI_VM__\n")
                      (net-marker "\n__TEXTUI_NET__\n")
                      (system-marker "\n__TEXTUI_SYSTEM__\n")
@@ -356,7 +365,7 @@
 
 (defun textui-btop-prototype--start-sample ()
   "Start one non-blocking real system sample."
-  (unless (or textui-btop-prototype--paused
+  (unless (or (textui-btop-prototype--state :paused)
               (process-live-p textui-btop-prototype--sample-process))
     (let* ((output (generate-new-buffer " *textui-btop-sample*"))
            (process
@@ -632,16 +641,18 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 
 (defun textui-btop-prototype--ordered-processes ()
   "Return filtered and sorted sampled processes."
-  (let* ((filtered
-          (if (string-empty-p textui-btop-prototype--filter)
+  (let* ((filter (textui-btop-prototype--state :filter))
+         (filtered
+          (if (string-empty-p filter)
               (copy-sequence textui-btop-prototype--processes)
             (cl-remove-if-not
              (lambda (process)
                (string-match-p
-                (regexp-quote textui-btop-prototype--filter)
+                (regexp-quote filter)
                 (downcase (plist-get process :name))))
              textui-btop-prototype--processes)))
-         (key (aref [cpu memory pid] textui-btop-prototype--sort-index))
+         (key (aref [cpu memory pid]
+                    (textui-btop-prototype--state :sort-index)))
          (sorted
           (sort filtered
                 (lambda (left right)
@@ -653,12 +664,14 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                        ('cpu (textui-btop-prototype--process-cpu right))
                        ('memory (plist-get right :mem))
                        (_ (plist-get right :pid))))))))
-    (if textui-btop-prototype--reversed (nreverse sorted) sorted)))
+    (if (textui-btop-prototype--state :reversed)
+        (nreverse sorted)
+      sorted)))
 
 (defun textui-btop-prototype--current-process ()
   "Return currently selected process."
   (let ((processes (textui-btop-prototype--ordered-processes)))
-    (nth (min textui-btop-prototype--process-index
+    (nth (min (textui-btop-prototype--state :process-index)
               (max 0 (1- (length processes))))
          processes)))
 
@@ -703,16 +716,20 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                           (when selected '(:focus-id btop-process)))
           :action
           (lambda (&rest _)
-            (setq textui-btop-prototype--process-index index)
-            (textui-btop-prototype--refresh-lower)))))
+            (textui-btop-prototype--update-lower
+             (lambda (state)
+               (textui-btop-prototype--state-with
+                state :process-index index)))))))
 
 (defun textui-btop-prototype--process-panel (width height)
   "Return process details and table at WIDTH by HEIGHT."
   (let* ((processes (textui-btop-prototype--ordered-processes))
          (maximum (max 0 (1- (length processes))))
-         (selected (min textui-btop-prototype--process-index maximum))
+         (selected (min (textui-btop-prototype--state :process-index)
+                        maximum))
          (process (nth selected processes))
-         (detail-height (if (and textui-btop-prototype--details process) 6 0))
+         (detail-height
+          (if (and (textui-btop-prototype--state :details) process) 6 0))
          (fixed (+ 3 detail-height))
          (slots (max 1 (- height fixed)))
          (start (max 0 (min (- (length processes)
@@ -720,23 +737,25 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                             (- selected (/ slots 2)))))
          (visible (cl-subseq processes start
                              (min (length processes) (+ start slots))))
-         (sort (aref [cpu memory pid] textui-btop-prototype--sort-index))
+         (sort (aref [cpu memory pid]
+                     (textui-btop-prototype--state :sort-index)))
          (attributes (and process
                           (process-attributes (plist-get process :pid))))
          (threads (or (alist-get 'thcount attributes) 0))
          children)
-    (setq textui-btop-prototype--process-index selected)
     (push (textui-btop-prototype--item
            (textui-btop-prototype--title-line
             width "4" "proc"
             (format "%s%s%s"
                     sort
-                    (if textui-btop-prototype--reversed " reverse" "")
-                    (if textui-btop-prototype--paused " paused" ""))
+                    (if (textui-btop-prototype--state :reversed)
+                        " reverse" "")
+                    (if (textui-btop-prototype--state :paused)
+                        " paused" ""))
             'textui-btop-prototype-process-face)
            width)
           children)
-    (when (and textui-btop-prototype--details process)
+    (when (and (textui-btop-prototype--state :details) process)
       (dolist
           (line
            (list
@@ -881,7 +900,7 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
   (textui-btop-prototype--item
    (textui-btop-prototype--fit
     (format "↑↓ select  Enter details  ←→ sort  / filter  r reverse  p %s  1-4 boxes  q quit"
-            (if textui-btop-prototype--paused "resume" "pause"))
+            (if (textui-btop-prototype--state :paused) "resume" "pause"))
     width)
    width 'textui-btop-prototype-muted-face))
 
@@ -910,11 +929,11 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
     (textui-refresh-region
      (current-buffer) 'btop-cpu #'textui-btop-prototype--cpu-elements)))
 
-(defun textui-btop-prototype--refresh-lower ()
-  "Refresh only lower boxes immediately."
-  (when (assq 'btop-lower textui--refresh-regions)
-    (textui-refresh-region
-     (current-buffer) 'btop-lower #'textui-btop-prototype--lower-elements)))
+(defun textui-btop-prototype--update-lower (updater)
+  "Apply state UPDATER and queue one refresh of the lower boxes."
+  (textui-update
+   (current-buffer) updater
+   :region 'btop-lower :producer #'textui-btop-prototype--lower-elements))
 
 (defun textui-btop-prototype--tick-buffer (buffer)
   "Start a real asynchronous sample for prototype BUFFER."
@@ -927,10 +946,13 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
   (interactive "p")
   (let ((maximum (max 0 (1- (length
                              (textui-btop-prototype--ordered-processes))))))
-    (setq textui-btop-prototype--process-index
-          (max 0 (min maximum
-                      (+ textui-btop-prototype--process-index amount))))
-    (textui-btop-prototype--refresh-lower)))
+    (textui-btop-prototype--update-lower
+     (lambda (state)
+       (textui-btop-prototype--state-with
+        state :process-index
+        (max 0 (min maximum
+                    (+ (min maximum (plist-get state :process-index))
+                       amount))))))))
 
 (defun textui-btop-prototype-down ()
   "Select the next process."
@@ -945,48 +967,62 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-toggle-details ()
   "Toggle selected process details."
   (interactive)
-  (setq textui-btop-prototype--details (not textui-btop-prototype--details))
-  (textui-btop-prototype--refresh-lower))
+  (textui-btop-prototype--update-lower
+   (lambda (state)
+     (textui-btop-prototype--state-with
+      state :details (not (plist-get state :details))))))
 
 (defun textui-btop-prototype-toggle-pause ()
   "Pause or resume real metric sampling."
   (interactive)
-  (setq textui-btop-prototype--paused (not textui-btop-prototype--paused))
-  (textui-btop-prototype--refresh-lower)
-  (unless textui-btop-prototype--paused
+  (textui-btop-prototype--update-lower
+   (lambda (state)
+     (textui-btop-prototype--state-with
+      state :paused (not (plist-get state :paused)))))
+  (unless (textui-btop-prototype--state :paused)
     (textui-btop-prototype--start-sample)))
 
 (defun textui-btop-prototype-cycle-sort (amount)
   "Cycle process sorting by AMOUNT."
   (interactive "p")
-  (setq textui-btop-prototype--sort-index
-        (mod (+ textui-btop-prototype--sort-index amount) 3)
-        textui-btop-prototype--process-index 0)
-  (textui-btop-prototype--refresh-lower))
+  (textui-btop-prototype--update-lower
+   (lambda (state)
+     (textui-btop-prototype--state-with
+      state
+      :sort-index (mod (+ (plist-get state :sort-index) amount) 3)
+      :process-index 0))))
 
 (defun textui-btop-prototype-toggle-reverse ()
   "Reverse the process ordering."
   (interactive)
-  (setq textui-btop-prototype--reversed
-        (not textui-btop-prototype--reversed)
-        textui-btop-prototype--process-index 0)
-  (textui-btop-prototype--refresh-lower))
+  (textui-btop-prototype--update-lower
+   (lambda (state)
+     (textui-btop-prototype--state-with
+      state
+      :reversed (not (plist-get state :reversed))
+      :process-index 0))))
 
 (defun textui-btop-prototype-toggle-filter ()
   "Toggle a visible prototype process filter."
   (interactive)
-  (setq textui-btop-prototype--filter
-        (if (string-empty-p textui-btop-prototype--filter) "emacs" "")
-        textui-btop-prototype--process-index 0)
-  (textui-btop-prototype--refresh-lower))
+  (textui-btop-prototype--update-lower
+   (lambda (state)
+     (textui-btop-prototype--state-with
+      state
+      :filter (if (string-empty-p (plist-get state :filter)) "emacs" "")
+      :process-index 0))))
 
 (defun textui-btop-prototype-toggle-box (box)
   "Toggle BOX and rebuild the responsive region structure."
-  (if (memq box textui-btop-prototype--boxes)
-      (setq textui-btop-prototype--boxes
-            (delq box textui-btop-prototype--boxes))
-    (push box textui-btop-prototype--boxes))
-  (textui-refresh (current-buffer)))
+  (textui-update
+   (current-buffer)
+   (lambda (state)
+     (let ((boxes (plist-get state :boxes)))
+       (textui-btop-prototype--state-with
+        state :boxes
+        (if (memq box boxes)
+            (cl-remove box boxes)
+          (cons box boxes)))))))
 
 (defun textui-btop-prototype--maybe-refresh-for-height ()
   "Rebuild when a height-only resize changes panel allocation."
@@ -1064,13 +1100,6 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
         (textui-mode))
       (textui-btop-prototype--stop-timer)
       (setq-local textui-btop-prototype--tick 0
-                  textui-btop-prototype--boxes '(cpu mem net proc)
-                  textui-btop-prototype--process-index 0
-                  textui-btop-prototype--sort-index 0
-                  textui-btop-prototype--reversed nil
-                  textui-btop-prototype--filter ""
-                  textui-btop-prototype--paused nil
-                  textui-btop-prototype--details t
                   textui-btop-prototype--last-height nil
                   textui-btop-prototype--processes nil
                   textui-btop-prototype--cpu-value 0.0
@@ -1093,7 +1122,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                   textui-btop-prototype--download-history nil
                   textui-btop-prototype--upload-history nil))
     (textui-open textui-btop-prototype--buffer-name
-                 #'textui-btop-prototype--frame)
+                 #'textui-btop-prototype--frame
+                 (copy-tree textui-btop-prototype--initial-state))
     (let ((window (get-buffer-window buffer t)))
       (when window
         (delete-other-windows window)
@@ -1110,8 +1140,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
       (textui-btop-prototype--install-keys)
       (add-hook 'window-configuration-change-hook
                 #'textui-btop-prototype--maybe-refresh-for-height nil t)
-      (add-hook 'kill-buffer-hook
-                #'textui-btop-prototype--stop-timer nil t)
+      (textui-register-cleanup
+       buffer #'textui-btop-prototype--stop-timer)
       (setq textui-btop-prototype--timer
             (run-at-time textui-btop-prototype--interval
                          textui-btop-prototype--interval
