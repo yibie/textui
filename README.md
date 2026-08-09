@@ -48,6 +48,32 @@ independently refreshed regions. More recordings cover
 [the 10,000-row K9s viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif),
 and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
+## What's new in 0.2.0
+
+TextUI 0.2.0 adds buffer runtime coordination while keeping Emacs `widget.el`
+as the control system.
+
+Highlights:
+
+- Routes top-level plist state changes to named refresh regions.
+- Coalesces repeated regional updates and falls back to full reconciliation for
+  structural changes.
+- Adds dependency-aware lifecycle effects for timers, processes, and cleanup.
+- Adds lifecycle-safe async callbacks that ignore stale work.
+- Updates the btop prototype to use automatic state routing and managed live
+  sampling.
+- Documents the new state, effect, and regional refresh interfaces.
+
+In the btop 50-process fixture, the routed details update improved from a
+median of 11.65 ms to 5.67 ms, about 2.05x faster, while continuing to use
+native `widget.el` push-button rows.
+
+Verification:
+
+- 87 ERT tests pass.
+- Byte compilation passes with warnings treated as errors.
+- Requires Emacs 29.1 or later.
+
 ## Load TextUI from a checkout
 
 Until TextUI is installed as a package, add its directory to `load-path`:
