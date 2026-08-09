@@ -56,12 +56,13 @@
   (with-temp-buffer
     (textui-mode)
     (setq-local textui-state
-                (copy-tree textui-btop-prototype--initial-state))
-    (let ((rendered
-           (textui--render-frame
-            (textui-btop-prototype--frame 100) 100)))
-      (should (string-match-p "cpu" rendered))
-      (should (string-match-p "proc" rendered)))))
+                (plist-put (copy-tree textui-btop-prototype--initial-state)
+                           :paused t)
+                textui--last-width 100
+                textui--render-function #'textui-btop-prototype--frame)
+    (textui-refresh (current-buffer))
+    (should (string-match-p "cpu" (buffer-string)))
+    (should (string-match-p "proc" (buffer-string)))))
 
 (ert-deftest textui-k9s-demo-renders-one-buffer-with-bounded-viewport ()
   (let ((textui-tui-app-scope 'all)

@@ -1,18 +1,19 @@
 # TextUI
 
-TextUI is a layout library for Emacs package authors who want to build
-interactive buffers without recalculating columns every time a window changes
-width.
+TextUI is a small UI runtime for Emacs package authors who want to build
+responsive, long-running interactive buffers on top of `widget.el`.
 
 Your package keeps its state in ordinary Lisp values and supplies a render
 function. TextUI gives that function the available width, lays out the returned
 elements, creates native `widget.el` controls, and redraws the buffer when its
-width changes. It also restores point after a redraw and can replace a bounded
-region when rebuilding the whole interface would be wasteful.
+width changes. It also coordinates state updates, preserves point, replaces
+bounded regions, and ties timers and asynchronous callbacks to the buffer's
+lifecycle.
 
-TextUI is a layout engine, not a component library. It provides Flex, Grid,
-width-aware text, image placement, and refresh mechanics. Buttons, editable
-fields, toggles, and package-defined widgets still belong to `widget.el`.
+TextUI is not a replacement widget library. Buttons, editable fields, toggles,
+validation, and package-defined controls still belong to `widget.el`. TextUI
+adds the runtime and layout capabilities around those controls: state-driven
+refresh, lifecycle effects, Flex, Grid, width-aware text, and image placement.
 
 TextUI requires Emacs 29.1 or newer and has no external runtime dependencies.
 
@@ -25,9 +26,16 @@ to keep using native Emacs widgets but do not want to calculate their positions
 by hand.
 
 TextUI does not manage window layouts, divide an application across several
-buffers, allocate height, fetch data, or prescribe a component/state model. It
-is also not intended to replace ordinary editable major modes. Your package
-remains responsible for those parts.
+buffers, allocate height, or fetch and parse application data. It is also not
+intended to replace ordinary editable major modes.
+
+The responsibility split is deliberate:
+
+- `widget.el` owns controls, input behavior, validation, and custom widget
+  definitions.
+- TextUI owns buffer state coordination, resource lifecycle, refresh,
+  reconciliation, focus preservation, and responsive layout.
+- Your package owns domain data, commands, parsing, and the render function.
 
 ## See TextUI in action
 
@@ -70,11 +78,7 @@ This is a complete counter owned by another package:
        :value "Increment"
        :layout (:focus-id increment)
        :action ,(lambda (&rest _)
-                  (textui-update
-                   (current-buffer)
-                   (lambda (state)
-                     (plist-put (copy-sequence state) :count
-                                (1+ (plist-get state :count)))))))))))
+                  (textui-set-state (current-buffer) :count #'1+)))))))
 
 (defun my-package-dashboard ()
   (interactive)
@@ -90,12 +94,13 @@ restores point to the button.
 The working model is small:
 
 ```text
-your Lisp state + available width -> render function -> TextUI buffer
+state + available width -> render function -> widget.el buffer
+declared effects          -> managed timers, processes, and subscriptions
 ```
 
-The render function is the evaluation boundary. Compute final property values
-there; TextUI does not add a binding language, component instances, or a virtual
-DOM.
+The render function is the evaluation seam. Compute final property values and
+declare buffer-level effects there. TextUI does not add a binding language, a
+second widget system, or a virtual DOM.
 
 ## Keep buffer state and resources together
 
@@ -111,14 +116,44 @@ TextUI preserves unchanged regions and their widget.el objects; otherwise it
 falls back to a complete rebuild. If the updater signals an error, the old
 state is retained.
 
-This is deliberately smaller than a component system: TextUI does not provide
-component-local hooks, dependency tracking, or lifecycle phases. Register
-timers, processes, and subscriptions for cleanup when their buffer is killed:
+For plist state, `textui-set-state` updates one key. Its value may be a literal
+or a function of the previous value:
 
 ```elisp
-(textui-register-cleanup buffer
-                         (lambda () (cancel-timer package-timer)))
+(textui-set-state buffer :count #'1+)
 ```
+
+Declare a conditional timer, process, or subscription with `textui-effect`.
+TextUI runs its setup after the frame is committed. It retains the resource
+while the dependencies remain `equal`, runs the returned cleanup before they
+change, and also cleans it up when the effect disappears or the buffer dies:
+
+```elisp
+(textui-effect
+ 'poller
+ (list (plist-get textui-state :paused))
+ (lambda ()
+   (unless (plist-get textui-state :paused)
+     (let* ((tick
+             (textui-async-callback
+              (lambda ()
+                (textui-set-state
+                 (current-buffer) :ticks
+                 (lambda (ticks) (1+ (or ticks 0)))))))
+            (timer (run-with-timer 0 1 tick)))
+       (lambda () (cancel-timer timer))))))
+```
+
+`textui-async-callback` restores the owning buffer for the callback and ignores
+late calls after its effect has stopped. The same wrapper can be used as a
+process sentinel. The effect cleanup should cancel the timer, process, or
+subscription it created. For an unconditional resource that does not depend on
+rendered state, `textui-register-cleanup` remains available.
+
+Effects are reconciled when the complete render function is evaluated. A
+direct `textui-refresh-region` does not evaluate effects; use ordinary
+`textui-update` or `textui-set-state` when a changed key appears in an effect's
+dependencies.
 
 ## Choose an element
 
@@ -410,9 +445,9 @@ row when the new content permits it.
 - One TextUI interface is one stable buffer. Your package may arrange several
   buffers with normal Emacs windows, but TextUI does not own that application
   shell.
-- State is one buffer-local Lisp value. TextUI reconciles named regions but
-  does not infer Lisp dependencies or provide component-local state and
-  lifecycle hooks.
+- State and effects are buffer-local. TextUI does not infer arbitrary Lisp
+  dependencies or provide a separate tree of component-local state; effect
+  dependencies are declared explicitly.
 - Native widgets are atomic and single-line. If one widget is wider than a very
   narrow window, Emacs decides whether to continue the line or scroll it.
 - A lone layout element may receive less than its declared `:min-width` when the
@@ -469,6 +504,9 @@ rule for extracting general capabilities from prototypes is recorded in
 |-------------------------------------------------------------|---------------------------------------------------------|
 | `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
 | `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state and request one reconciled refresh        |
+| `(textui-set-state BUFFER KEY VALUE)`                        | Set one plist state key and request a refresh           |
+| `(textui-effect ID DEPENDENCIES SETUP)`                      | Reconcile a buffer-level lifecycle effect               |
+| `(textui-async-callback FUNCTION)`                           | Bind a callback to its effect and TextUI buffer         |
 | `(textui-request-refresh BUFFER)`                            | Coalesce and reconcile one frame refresh                |
 | `(textui-refresh BUFFER)`                                    | Rebuild the complete frame synchronously                |
 | `(textui-refresh-region BUFFER ID PRODUCER)`                 | Replace one named complete-line column immediately      |

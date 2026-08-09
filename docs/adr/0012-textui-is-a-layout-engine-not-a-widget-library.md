@@ -1,5 +1,9 @@
 # TextUI is a layout engine, not a widget library
 
+The layout-only framing is superseded by
+[ADR 0031](0031-textui-owns-buffer-runtime-lifecycle.md). TextUI now also owns
+the buffer runtime lifecycle; the decision not to replace `widget.el` remains.
+
 The "no leaf types" part of this decision is superseded by
 [ADR 0028](0028-prototypes-extract-proven-layout-primitives.md): TextUI may own
 small rendering leaves such as `:text` and `:image` when real prototypes prove

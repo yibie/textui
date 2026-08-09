@@ -26,7 +26,8 @@
 ;; TextUI lays out text and ordinary widget.el controls in responsive
 ;; Emacs buffers.
 ;; Its public surface is intentionally small: `textui-open',
-;; `textui-update', `textui-refresh', `textui-request-refresh',
+;; `textui-update', `textui-set-state', `textui-effect',
+;; `textui-async-callback', `textui-refresh', `textui-request-refresh',
 ;; `textui-refresh-region',
 ;; `textui-request-refresh-region', `textui-register-cleanup', and
 ;; `textui-register-expander'.
@@ -65,6 +66,15 @@
 (defvar textui--rendered-regions nil
   "Dynamically collected refresh region metadata.")
 
+(defvar textui--collect-effects nil
+  "Non-nil while the render function may declare lifecycle effects.")
+
+(defvar textui--rendered-effects nil
+  "Dynamically collected (ID DEPENDENCIES SETUP) effect descriptions.")
+
+(defvar textui--current-effect-token nil
+  "Dynamically bound token of the lifecycle effect being started.")
+
 (declare-function textui-kp-core-break-lines
                   "textui-kp-core" (string line-pixel))
 (declare-function textui-kp-core-justify-lines
@@ -81,6 +91,8 @@
 (defvar-local textui--region-refresh-timer nil)
 (defvar-local textui--refresh-timer nil)
 (defvar-local textui--cleanup-functions nil)
+(defvar-local textui--effects nil
+  "Active (ID DEPENDENCIES CLEANUP TOKEN) lifecycle effects.")
 (defvar-local textui--refresh-generation 0)
 (defvar-local textui--rendered-frame nil
   "Last pre-widget rendered frame used for automatic reconciliation.")
@@ -1292,6 +1304,82 @@ FOCUS and POSITION describe point in the selected window."
     map)
   "Keymap for `textui-mode'.")
 
+;;;###autoload
+(defun textui-effect (id dependencies setup)
+  "Keep one buffer lifecycle effect ID synchronized with DEPENDENCIES.
+Call this from a TextUI render function.  SETUP runs after the rendered frame
+is committed and may return a zero-argument cleanup function.  TextUI runs the
+cleanup before changed dependencies restart the effect, when a later render
+omits ID, or when the buffer is killed."
+  (unless textui--collect-effects
+    (error "textui-effect must be called by a TextUI render function"))
+  (unless id
+    (error "Effect ID must be non-nil"))
+  (unless (functionp setup)
+    (error "Effect setup must be a function: %S" setup))
+  (when (assoc id textui--rendered-effects)
+    (error "Duplicate effect ID: %S" id))
+  (push (list id (copy-tree dependencies) setup) textui--rendered-effects)
+  nil)
+
+(defun textui--effect-active-p (token)
+  "Return non-nil when TOKEN identifies an active current-buffer effect."
+  (cl-some (lambda (effect) (eq (nth 3 effect) token)) textui--effects))
+
+;;;###autoload
+(defun textui-async-callback (function)
+  "Return a lifecycle-bound asynchronous wrapper around FUNCTION.
+Create the wrapper inside a `textui-effect' SETUP function.  It restores the
+owning TextUI buffer before calling FUNCTION and ignores calls after that
+effect has stopped or the buffer has been killed."
+  (unless (functionp function)
+    (error "Async callback must wrap a function: %S" function))
+  (unless textui--current-effect-token
+    (error "textui-async-callback must be created by an effect setup"))
+  (let ((buffer (current-buffer))
+        (token textui--current-effect-token))
+    (lambda (&rest arguments)
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when (textui--effect-active-p token)
+            (apply function arguments)))))))
+
+(defun textui--start-effect (description)
+  "Start effect DESCRIPTION and return its active record."
+  (let* ((token (list 'textui-effect-token))
+         (record (list (nth 0 description) (nth 1 description) nil token)))
+    (push record textui--effects)
+    (condition-case error-data
+        (let ((textui--current-effect-token token))
+          (let ((cleanup (funcall (nth 2 description))))
+            (unless (or (null cleanup) (functionp cleanup))
+              (error "Effect cleanup must be a function or nil: %S" cleanup))
+            (setf (nth 2 record) cleanup)
+            record))
+      (error
+       (setq textui--effects (delq record textui--effects))
+       (signal (car error-data) (cdr error-data))))))
+
+(defun textui--commit-effects (descriptions)
+  "Reconcile active effects with rendered DESCRIPTIONS."
+  (let (stopped retained)
+    (dolist (effect textui--effects)
+      (let ((next (assoc (car effect) descriptions)))
+        (if (and next (equal (nth 1 effect) (nth 1 next)))
+            (push effect retained)
+          (push effect stopped))))
+    (setq textui--effects (nreverse retained))
+    (dolist (effect stopped)
+      (when (functionp (nth 2 effect))
+        (funcall (nth 2 effect))))
+    (dolist (description descriptions)
+      (unless (assoc (car description) textui--effects)
+        (textui--start-effect description)))
+    (setq textui--effects
+          (mapcar (lambda (description)
+                    (assoc (car description) textui--effects))
+                  descriptions))))
+
 (defun textui--dispose ()
   "Cancel internal work and run cleanup functions for the current buffer."
   (dolist (timer (list textui--refresh-timer
@@ -1303,9 +1391,13 @@ FOCUS and POSITION describe point in the selected window."
         textui--region-refresh-timer nil
         textui--region-refresh-requests nil
         textui--resize-cursor-timer nil)
-  (let ((cleanups textui--cleanup-functions)
+  (let ((cleanups (append (delq nil (mapcar (lambda (effect)
+                                              (nth 2 effect))
+                                            textui--effects))
+                          textui--cleanup-functions))
         first-error)
-    (setq textui--cleanup-functions nil)
+    (setq textui--effects nil
+          textui--cleanup-functions nil)
     (dolist (cleanup cleanups)
       (condition-case error-data
           (funcall cleanup)
@@ -1445,15 +1537,17 @@ Registering the same function object more than once has no effect."
       (move-to-column (plist-get snapshot :column))))))
 
 (defun textui--render-current-frame (buffer)
-  "Return BUFFER's current (WIDTH RENDERED REGIONS) frame data."
+  "Return BUFFER's current (WIDTH RENDERED REGIONS EFFECTS) frame data."
   (let ((width (textui--available-width buffer))
         (textui--collect-refresh-regions t)
-        (textui--rendered-regions nil))
+        (textui--rendered-regions nil)
+        (textui--collect-effects t)
+        (textui--rendered-effects nil))
     (let* ((frame (funcall textui--render-function width))
            (specs (textui--prepare-frame frame))
            (rendered (textui--render-specs specs width))
            (regions (textui--collect-refresh-region-spans rendered)))
-      (list width rendered regions))))
+      (list width rendered regions (nreverse textui--rendered-effects)))))
 
 (defun textui--commit-full-frame (buffer width rendered regions)
   "Commit a complete BUFFER frame described by WIDTH, RENDERED, and REGIONS."
@@ -1624,6 +1718,7 @@ Registering the same function object more than once has no effect."
                  buffer installed new template))))
           (setq textui--rendered-frame rendered
                 textui--last-width width))
+        (textui--commit-effects (nth 3 frame))
         buffer))))
 
 (defun textui--run-requested-region-refreshes (buffer)
@@ -1717,6 +1812,22 @@ REGION, PRODUCER refreshes that existing region directly."
       buffer)))
 
 ;;;###autoload
+(defun textui-set-state (buffer key value)
+  "Set plist KEY in live TextUI BUFFER state and request one refresh.
+When VALUE is a function, call it with KEY's current value and store its
+return value.  Use `textui-update' when state is not a property list or when a
+bounded region refresh is required."
+  (textui-update
+   buffer
+   (lambda (state)
+     (unless (textui--plist-p state)
+       (error "textui-set-state requires plist state: %S" state))
+     (let ((next (if (functionp value)
+                     (funcall value (plist-get state key))
+                   value)))
+       (plist-put (copy-sequence state) key next)))))
+
+;;;###autoload
 (defun textui-refresh-region (buffer id producer)
   "Replace refresh region ID in BUFFER using children from PRODUCER.
 PRODUCER receives the region's current content width and returns a proper
@@ -1789,7 +1900,8 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
       (let* ((textui--refreshing t)
              (frame (textui--render-current-frame buffer)))
         (textui--commit-full-frame
-         buffer (nth 0 frame) (nth 1 frame) (nth 2 frame)))
+         buffer (nth 0 frame) (nth 1 frame) (nth 2 frame))
+        (textui--commit-effects (nth 3 frame)))
       buffer)))
 
 ;;;###autoload

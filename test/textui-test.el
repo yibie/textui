@@ -724,6 +724,101 @@
           (should-not textui--refresh-timer))
       (kill-buffer buffer))))
 
+(ert-deftest textui-set-state-updates-one-plist-value ()
+  (let ((buffer (generate-new-buffer " *textui-set-state-test*"))
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 30
+                      textui-state '(:count 1 :label "kept")
+                      textui--render-function
+                      (lambda (_width)
+                        `((:type item :format "%v"
+                           :value ,(number-to-string
+                                    (plist-get textui-state :count))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'set-state-timer)))
+            (textui-set-state buffer :count (lambda (count) (1+ count)))
+            (should (equal textui-state '(:count 2 :label "kept")))
+            (apply (car scheduled) (cdr scheduled)))
+          (should (equal (buffer-string) "2")))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-effect-follows-rendered-dependencies ()
+  (let ((buffer (generate-new-buffer " *textui-effect-test*"))
+        (dependency 'first)
+        (show-effect t)
+        events)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 30
+           textui--render-function
+           (lambda (_width)
+             (when show-effect
+               (let ((value dependency))
+                 (textui-effect
+                  'worker (list value)
+                  (lambda ()
+                    (push (list 'start value) events)
+                    (lambda () (push (list 'stop value) events))))))
+             '((:type item :format "%v" :value "view"))))
+          (textui-refresh buffer)
+          (should (equal (reverse events) '((start first))))
+          (textui-refresh buffer)
+          (should (equal (reverse events) '((start first))))
+          (setq dependency 'second)
+          (textui-refresh buffer)
+          (should (equal (reverse events)
+                         '((start first) (stop first) (start second))))
+          (setq show-effect nil)
+          (textui-refresh buffer)
+          (should (equal (reverse events)
+                         '((start first) (stop first)
+                           (start second) (stop second)))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-async-callback-stops-with-its-effect ()
+  (let ((buffer (generate-new-buffer " *textui-async-effect-test*"))
+        (dependency 'first)
+        callbacks
+        cleanups
+        events)
+    (with-current-buffer buffer
+      (textui-mode)
+      (setq-local
+       textui--last-width 30
+       textui--render-function
+       (lambda (_width)
+         (let ((value dependency))
+           (textui-effect
+            'worker (list value)
+            (lambda ()
+              (push
+               (textui-async-callback
+                (lambda (event)
+                  (push (list value event (current-buffer)) events)))
+               callbacks)
+              (lambda () (push value cleanups)))))
+         '((:type item :format "%v" :value "view"))))
+      (textui-refresh buffer))
+    (funcall (car callbacks) 'alive)
+    (setq dependency 'second)
+    (with-current-buffer buffer
+      (textui-refresh buffer))
+    (funcall (cadr callbacks) 'stale)
+    (funcall (car callbacks) 'alive)
+    (kill-buffer buffer)
+    (funcall (car callbacks) 'stale)
+    (should (equal cleanups '(second first)))
+    (should (equal events (list (list 'second 'alive buffer)
+                                (list 'first 'alive buffer))))))
+
 (ert-deftest textui-cleanup-runs-once-when-buffer-is-killed ()
   (let ((buffer (generate-new-buffer " *textui-cleanup-test*"))
         (calls 0))

@@ -116,7 +116,6 @@
 (defvar-local textui-btop-prototype--sample-buffer nil)
 (defvar-local textui-btop-prototype--sample-started 0.0)
 (defvar-local textui-btop-prototype--last-sample-ms 0.0)
-(defvar-local textui-btop-prototype--timer nil)
 (defvar-local textui-btop-prototype--last-height nil)
 (defvar-local textui-btop-prototype--face-cookie nil)
 
@@ -316,54 +315,51 @@
 (defun textui-btop-prototype--sample-finished (process _event)
   "Consume asynchronous sampler PROCESS output."
   (when (memq (process-status process) '(exit signal))
-    (let* ((target (process-get process 'textui-buffer))
-           (output (process-buffer process))
+    (let* ((output (process-buffer process))
            (status (process-exit-status process))
            (text (and (buffer-live-p output)
                       (with-current-buffer output (buffer-string)))))
       (when (buffer-live-p output)
         (kill-buffer output))
-      (when (buffer-live-p target)
-        (with-current-buffer target
-          (setq textui-btop-prototype--sample-process nil
-                textui-btop-prototype--sample-buffer nil)
-          (if (/= status 0)
-              (error "btop sampler exited with status %d" status)
-            (unless (textui-btop-prototype--state :paused)
-              (let* ((vm-marker "\n__TEXTUI_VM__\n")
-                     (net-marker "\n__TEXTUI_NET__\n")
-                     (system-marker "\n__TEXTUI_SYSTEM__\n")
-                     (vm-start (string-match (regexp-quote vm-marker) text))
-                     (net-start (and vm-start
-                                     (string-match
-                                      (regexp-quote net-marker) text
-                                      (+ vm-start (length vm-marker)))))
-                     (system-start
-                      (and net-start
-                           (string-match
-                            (regexp-quote system-marker) text
-                            (+ net-start (length net-marker))))))
-                (unless (and vm-start net-start system-start)
-                  (error "btop sampler returned incomplete output"))
-                (textui-btop-prototype--record-sample
-                 (substring text 0 vm-start)
-                 (substring text (+ vm-start (length vm-marker)) net-start)
-                 (substring text (+ net-start (length net-marker)) system-start)
-                 (substring text (+ system-start (length system-marker))))
-                (setq textui-btop-prototype--last-sample-ms
-                      (* 1000.0
-                         (- (float-time)
-                            textui-btop-prototype--sample-started)))
-                (when (get-buffer-window target t)
-                  (when (assq 'btop-cpu textui--refresh-regions)
-                    (textui-request-refresh-region
-                     target 'btop-cpu
-                     #'textui-btop-prototype--cpu-elements))
-                  (textui-request-refresh-region
-                   target 'btop-lower
-                   #'textui-btop-prototype--lower-elements))))))))))
+      (setq textui-btop-prototype--sample-process nil
+            textui-btop-prototype--sample-buffer nil)
+      (if (/= status 0)
+          (error "btop sampler exited with status %d" status)
+        (unless (textui-btop-prototype--state :paused)
+          (let* ((vm-marker "\n__TEXTUI_VM__\n")
+                 (net-marker "\n__TEXTUI_NET__\n")
+                 (system-marker "\n__TEXTUI_SYSTEM__\n")
+                 (vm-start (string-match (regexp-quote vm-marker) text))
+                 (net-start (and vm-start
+                                 (string-match
+                                  (regexp-quote net-marker) text
+                                  (+ vm-start (length vm-marker)))))
+                 (system-start
+                  (and net-start
+                       (string-match
+                        (regexp-quote system-marker) text
+                        (+ net-start (length net-marker))))))
+            (unless (and vm-start net-start system-start)
+              (error "btop sampler returned incomplete output"))
+            (textui-btop-prototype--record-sample
+             (substring text 0 vm-start)
+             (substring text (+ vm-start (length vm-marker)) net-start)
+             (substring text (+ net-start (length net-marker)) system-start)
+             (substring text (+ system-start (length system-marker))))
+            (setq textui-btop-prototype--last-sample-ms
+                  (* 1000.0
+                     (- (float-time)
+                        textui-btop-prototype--sample-started)))
+            (when (get-buffer-window (current-buffer) t)
+              (when (assq 'btop-cpu textui--refresh-regions)
+                (textui-request-refresh-region
+                 (current-buffer) 'btop-cpu
+                 #'textui-btop-prototype--cpu-elements))
+              (textui-request-refresh-region
+               (current-buffer) 'btop-lower
+               #'textui-btop-prototype--lower-elements))))))))
 
-(defun textui-btop-prototype--start-sample ()
+(defun textui-btop-prototype--start-sample (sentinel)
   "Start one non-blocking real system sample."
   (unless (or (textui-btop-prototype--state :paused)
               (process-live-p textui-btop-prototype--sample-process))
@@ -376,8 +372,7 @@
              :coding 'utf-8-unix
              :noquery t
              :connection-type 'pipe
-             :sentinel #'textui-btop-prototype--sample-finished)))
-      (process-put process 'textui-buffer (current-buffer))
+             :sentinel sentinel)))
       (setq textui-btop-prototype--sample-buffer output
             textui-btop-prototype--sample-process process
             textui-btop-prototype--sample-started (float-time)))))
@@ -906,6 +901,9 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 
 (defun textui-btop-prototype--frame (width)
   "Return complete btop-like frame for WIDTH."
+  (textui-effect 'btop-sampler
+                 (list (textui-btop-prototype--state :paused))
+                 #'textui-btop-prototype--sampling-effect)
   (setq textui-btop-prototype--last-height
         (textui-btop-prototype--visible-height))
   (let (children)
@@ -932,12 +930,6 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype--update-lower (updater)
   "Apply state UPDATER; TextUI reconciles the changed named region."
   (textui-update (current-buffer) updater))
-
-(defun textui-btop-prototype--tick-buffer (buffer)
-  "Start a real asynchronous sample for prototype BUFFER."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (textui-btop-prototype--start-sample))))
 
 (defun textui-btop-prototype-move (amount)
   "Move process selection by AMOUNT."
@@ -973,12 +965,7 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-toggle-pause ()
   "Pause or resume real metric sampling."
   (interactive)
-  (textui-btop-prototype--update-lower
-   (lambda (state)
-     (textui-btop-prototype--state-with
-      state :paused (not (plist-get state :paused)))))
-  (unless (textui-btop-prototype--state :paused)
-    (textui-btop-prototype--start-sample)))
+  (textui-set-state (current-buffer) :paused #'not))
 
 (defun textui-btop-prototype-cycle-sort (amount)
   "Cycle process sorting by AMOUNT."
@@ -1032,18 +1019,30 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                  (/= height textui-btop-prototype--last-height))
         (textui-refresh (current-buffer))))))
 
-(defun textui-btop-prototype--stop-timer ()
-  "Stop this buffer's prototype timer and pending sampler."
-  (when (timerp textui-btop-prototype--timer)
-    (cancel-timer textui-btop-prototype--timer)
-    (setq textui-btop-prototype--timer nil))
+(defun textui-btop-prototype--stop-sample ()
+  "Stop this buffer's pending sampler."
   (when (process-live-p textui-btop-prototype--sample-process)
-    (process-put textui-btop-prototype--sample-process 'textui-buffer nil)
     (delete-process textui-btop-prototype--sample-process))
   (when (buffer-live-p textui-btop-prototype--sample-buffer)
     (kill-buffer textui-btop-prototype--sample-buffer))
   (setq textui-btop-prototype--sample-process nil
         textui-btop-prototype--sample-buffer nil))
+
+(defun textui-btop-prototype--sampling-effect ()
+  "Start live sampling and return its lifecycle cleanup."
+  (unless (textui-btop-prototype--state :paused)
+    (let* ((sentinel
+            (textui-async-callback
+             #'textui-btop-prototype--sample-finished))
+           (sample
+            (textui-async-callback
+             (lambda ()
+               (textui-btop-prototype--start-sample sentinel))))
+           (timer
+            (run-at-time 0 textui-btop-prototype--interval sample)))
+      (lambda ()
+        (cancel-timer timer)
+        (textui-btop-prototype--stop-sample)))))
 
 (defun textui-btop-prototype--ensure-supported-system ()
   "Reject systems unsupported by the prototype's sampler commands."
@@ -1051,9 +1050,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
     (user-error "The btop prototype currently supports macOS only")))
 
 (defun textui-btop-prototype-quit ()
-  "Stop live sampling and kill the current prototype buffer."
+  "Kill the current prototype buffer."
   (interactive)
-  (textui-btop-prototype--stop-timer)
   (kill-buffer (current-buffer)))
 
 (defun textui-btop-prototype--install-keys ()
@@ -1096,7 +1094,6 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
     (with-current-buffer buffer
       (unless (derived-mode-p 'textui-mode)
         (textui-mode))
-      (textui-btop-prototype--stop-timer)
       (setq-local textui-btop-prototype--tick 0
                   textui-btop-prototype--last-height nil
                   textui-btop-prototype--processes nil
@@ -1137,14 +1134,7 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                'default 'textui-btop-prototype-default-face)))
       (textui-btop-prototype--install-keys)
       (add-hook 'window-configuration-change-hook
-                #'textui-btop-prototype--maybe-refresh-for-height nil t)
-      (textui-register-cleanup
-       buffer #'textui-btop-prototype--stop-timer)
-      (setq textui-btop-prototype--timer
-            (run-at-time textui-btop-prototype--interval
-                         textui-btop-prototype--interval
-                         #'textui-btop-prototype--tick-buffer buffer))
-      (textui-btop-prototype--start-sample))
+                #'textui-btop-prototype--maybe-refresh-for-height nil t))
     buffer))
 
 (unless noninteractive

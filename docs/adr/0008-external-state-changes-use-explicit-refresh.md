@@ -1,5 +1,8 @@
 # External state changes use explicit refresh
 
+The lifecycle-ownership part of this decision is superseded by
+[ADR 0031](0031-textui-owns-buffer-runtime-lifecycle.md).
+
 The no-queue part of this decision is superseded by
 [ADR 0029](0029-dynamic-region-refresh-requests-coalesce.md). Immediate full
 and region refreshes still reject reentrancy; external callbacks may instead

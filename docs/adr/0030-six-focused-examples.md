@@ -1,5 +1,8 @@
 # TextUI keeps six focused examples
 
+The statement that TextUI does not own application lifecycle is superseded by
+[ADR 0031](0031-textui-owns-buffer-runtime-lifecycle.md).
+
 The published example set has two direct layout demonstrations and four
 recognizable TUI stress tests:
 
@@ -20,4 +23,5 @@ The one-buffer K9s demo owns the small amount of visual vocabulary it needs and
 does not depend on the rejected three-buffer shell.  The btop demo is the most
 practical example: on macOS it reads live local state through read-only system
 commands and exercises independently refreshed regions.  It is still an
-example, not a promise that TextUI owns application data sources or lifecycle.
+example: its commands and parsers remain application-owned, while TextUI owns
+the sampler effect's lifetime under ADR 0031.

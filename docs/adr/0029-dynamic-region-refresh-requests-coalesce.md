@@ -1,5 +1,8 @@
 # Dynamic region refresh requests coalesce
 
+The lifecycle-ownership part of this decision is superseded by
+[ADR 0031](0031-textui-owns-buffer-runtime-lifecycle.md).
+
 Timers, process sentinels, and other external callbacks may call
 `textui-request-refresh-region BUFFER ID PRODUCER`. TextUI schedules the region
 refresh after the current Emacs command returns. Repeated pending requests for
