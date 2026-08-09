@@ -901,6 +901,10 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 
 (defun textui-btop-prototype--frame (width)
   "Return complete btop-like frame for WIDTH."
+  (textui-route-state
+   'btop-lower
+   '(:process-index :sort-index :reversed :filter :details)
+   #'textui-btop-prototype--lower-elements)
   (textui-effect 'btop-sampler
                  (list (textui-btop-prototype--state :paused))
                  #'textui-btop-prototype--sampling-effect)
@@ -928,7 +932,7 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
      (current-buffer) 'btop-cpu #'textui-btop-prototype--cpu-elements)))
 
 (defun textui-btop-prototype--update-lower (updater)
-  "Apply state UPDATER; TextUI reconciles the changed named region."
+  "Apply state UPDATER; TextUI routes its changed keys to the lower region."
   (textui-update (current-buffer) updater))
 
 (defun textui-btop-prototype-move (amount)

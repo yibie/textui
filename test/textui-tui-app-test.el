@@ -64,6 +64,35 @@
     (should (string-match-p "cpu" (buffer-string)))
     (should (string-match-p "proc" (buffer-string)))))
 
+(ert-deftest textui-btop-prototype-routes-interaction-state-only ()
+  (with-temp-buffer
+    (textui-mode)
+    (let ((renders 0)
+          scheduled)
+      (setq-local textui-state
+                  (plist-put (copy-tree textui-btop-prototype--initial-state)
+                             :paused t)
+                  textui--last-width 100
+                  textui--render-function
+                  (lambda (width)
+                    (setq renders (1+ renders))
+                    (textui-btop-prototype--frame width)))
+      (textui-refresh (current-buffer))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_time _repeat function &rest arguments)
+                   (setq scheduled (cons function arguments))
+                   'btop-state-route-timer)))
+        (textui-btop-prototype-toggle-details)
+        (should textui--region-refresh-timer)
+        (should-not textui--refresh-timer)
+        (apply (car scheduled) (cdr scheduled))
+        (should (= renders 1))
+        (setq scheduled nil)
+        (textui-btop-prototype-toggle-box 'cpu)
+        (should textui--refresh-timer)
+        (apply (car scheduled) (cdr scheduled))
+        (should (= renders 2))))))
+
 (ert-deftest textui-k9s-demo-renders-one-buffer-with-bounded-viewport ()
   (let ((textui-tui-app-scope 'all)
         (textui-tui-app-selected nil))

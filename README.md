@@ -95,6 +95,7 @@ The working model is small:
 
 ```text
 state + available width -> render function -> widget.el buffer
+declared state routes     -> affected refresh-region producers
 declared effects          -> managed timers, processes, and subscriptions
 ```
 
@@ -111,10 +112,11 @@ state.
 
 `textui-update` passes the current value to an updater, stores its return value,
 and requests one refresh. Several updates before Emacs processes its next timer
-event are combined. When the frame keeps the same named-region structure,
-TextUI preserves unchanged regions and their widget.el objects; otherwise it
-falls back to a complete rebuild. If the updater signals an error, the old
-state is retained.
+event are combined. For plist state, TextUI identifies changed top-level keys
+and uses any matching state routes. If every changed key is covered, it skips
+the complete render function and runs only the affected region producers.
+Otherwise it reconciles the complete frame, preserving unchanged named regions
+when possible. If the updater signals an error, the old state is retained.
 
 For plist state, `textui-set-state` updates one key. Its value may be a literal
 or a function of the previous value:
@@ -150,10 +152,10 @@ process sentinel. The effect cleanup should cancel the timer, process, or
 subscription it created. For an unconditional resource that does not depend on
 rendered state, `textui-register-cleanup` remains available.
 
-Effects are reconciled when the complete render function is evaluated. A
-direct `textui-refresh-region` does not evaluate effects; use ordinary
-`textui-update` or `textui-set-state` when a changed key appears in an effect's
-dependencies.
+Effects are reconciled when the complete render function is evaluated. A state
+key used by an effect or by the surrounding layout must therefore remain
+unrouted; its normal `textui-update` or `textui-set-state` then falls back to a
+complete render and reevaluates the effect.
 
 ## Choose an element
 
@@ -351,6 +353,37 @@ refresh ID:
  :children (...))
 ```
 
+When top-level plist keys affect only that region, declare their route from the
+same render function:
+
+```elisp
+(textui-route-state
+ 'rows
+ '(:selected :filter)
+ #'my-package--row-elements)
+```
+
+The route must name a refresh region present in that render. Its producer reads
+the current `textui-state`, receives the region's current content width, and
+returns replacement children. After this declaration, either of these updates
+automatically refreshes only `rows`:
+
+```elisp
+(textui-set-state buffer :selected next-row)
+
+(textui-update
+ buffer
+ (lambda (state)
+   (let ((next (copy-sequence state)))
+     (setq next (plist-put next :selected next-row))
+     (plist-put next :filter query))))
+```
+
+All changed keys must have routes. If one key is undeclared, TextUI uses a
+complete render because that key may affect the frame shell, layout, or an
+effect. Updaters should replace top-level plist values rather than mutate
+nested values in place so changed keys remain observable.
+
 Replace only that region at its current width:
 
 ```elisp
@@ -373,8 +406,8 @@ When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
 the buffer has already changed and does not follow it with another automatic
 refresh.
 
-For ordinary state changes, no producer is needed. `textui-update` renders the
-new frame description and automatically preserves unchanged named regions:
+Without a matching state route, `textui-update` renders the new frame
+description and automatically preserves unchanged named regions:
 
 ```elisp
 (textui-update
@@ -383,10 +416,10 @@ new frame description and automatically preserves unchanged named regions:
    (plist-put (copy-sequence state) :selected next-row)))
 ```
 
-This automatic path still computes the complete layout so it can safely detect
-structural changes. For high-frequency updates, pass `:region` and `:producer`
-to `textui-update`, or call a region refresh directly, to skip unrelated layout
-work.
+This fallback path computes the complete layout so it can safely detect
+structural changes. For external data that does not live in `textui-state`,
+pass `:region` and `:producer` to `textui-update`, or request a region refresh
+directly.
 
 For bursts from timers and process callbacks, request the refresh instead:
 
@@ -445,9 +478,9 @@ row when the new content permits it.
 - One TextUI interface is one stable buffer. Your package may arrange several
   buffers with normal Emacs windows, but TextUI does not own that application
   shell.
-- State and effects are buffer-local. TextUI does not infer arbitrary Lisp
-  dependencies or provide a separate tree of component-local state; effect
-  dependencies are declared explicitly.
+- State, routes, and effects are buffer-local. TextUI routes explicitly named
+  top-level plist keys but does not infer arbitrary Lisp dependencies or
+  provide a separate tree of component-local state.
 - Native widgets are atomic and single-line. If one widget is wider than a very
   narrow window, Emacs decides whether to continue the line or scroll it.
 - A lone layout element may receive less than its declared `:min-width` when the
@@ -505,6 +538,7 @@ rule for extracting general capabilities from prototypes is recorded in
 | `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
 | `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state and request one reconciled refresh        |
 | `(textui-set-state BUFFER KEY VALUE)`                        | Set one plist state key and request a refresh           |
+| `(textui-route-state REGION KEYS PRODUCER)`                  | Route plist-key changes to one named refresh region     |
 | `(textui-effect ID DEPENDENCIES SETUP)`                      | Reconcile a buffer-level lifecycle effect               |
 | `(textui-async-callback FUNCTION)`                           | Bind a callback to its effect and TextUI buffer         |
 | `(textui-request-refresh BUFFER)`                            | Coalesce and reconcile one frame refresh                |

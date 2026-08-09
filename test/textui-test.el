@@ -748,6 +748,100 @@
           (should (equal (buffer-string) "2")))
       (kill-buffer buffer))))
 
+(ert-deftest textui-update-routes-plist-keys-to-named-regions ()
+  (let ((buffer (generate-new-buffer " *textui-state-route-test*"))
+        (renders 0)
+        (scheduled-count 0)
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 30
+           textui-state '(:left "L0" :right "R0" :shell "S0")
+           textui--render-function
+           (lambda (_width)
+             (setq renders (1+ renders))
+             (textui-route-state
+              'left '(:left)
+              (lambda (_width)
+                `((:type item :format "%v"
+                   :value ,(plist-get textui-state :left)))))
+             (textui-route-state
+              'right '(:right)
+              (lambda (_width)
+                `((:type item :format "%v"
+                   :value ,(plist-get textui-state :right)))))
+             `((:type :flex :direction :column :gap 0
+                :children
+                ((:type :flex :direction :column :gap 0
+                  :layout (:refresh-id left)
+                  :children
+                  ((:type item :format "%v"
+                    :value ,(plist-get textui-state :left))))
+                 (:type :flex :direction :column :gap 0
+                  :layout (:refresh-id right)
+                  :children
+                  ((:type item :format "%v"
+                    :value ,(plist-get textui-state :right))))
+                 (:type item :format "%v"
+                  :value ,(plist-get textui-state :shell)))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled-count (1+ scheduled-count)
+                             scheduled (cons function arguments))
+                       'state-route-timer)))
+            (textui-update
+             buffer
+             (lambda (state)
+               (let ((next (copy-sequence state)))
+                 (setq next (plist-put next :left "L1"))
+                 (plist-put next :right "R1"))))
+            (should (= scheduled-count 1))
+            (should (= renders 1))
+            (should-not textui--refresh-timer)
+            (apply (car scheduled) (cdr scheduled))
+            (should (= renders 1))
+            (should (equal (textui-test--trimmed-lines (buffer-string))
+                           '("L1" "R1" "S0")))
+            (setq scheduled nil)
+            (textui-update buffer #'identity)
+            (should textui--refresh-timer)
+            (apply (car scheduled) (cdr scheduled))
+            (should (= renders 2))
+            (setq scheduled nil)
+            (textui-set-state buffer :shell "S1")
+            (should textui--refresh-timer)
+            (apply (car scheduled) (cdr scheduled))
+            (should (= renders 3))
+            (should (equal (textui-test--trimmed-lines (buffer-string))
+                           '("L1" "R1" "S1")))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-state-route-must-name-a-rendered-region ()
+  (let ((buffer (generate-new-buffer " *textui-invalid-state-route-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 30
+                      textui-state '(:value "old")
+                      textui--render-function
+                      (lambda (_width)
+                        `((:type item :format "%v"
+                           :value ,(plist-get textui-state :value)))))
+          (textui-refresh buffer)
+          (setq-local
+           textui--render-function
+           (lambda (_width)
+             (textui-route-state 'missing '(:value) #'ignore)
+             '((:type item :format "%v" :value "new"))))
+          (let ((error-data (should-error (textui-refresh buffer))))
+            (should (string-match-p "Unknown state route region"
+                                    (error-message-string error-data))))
+          (should (equal (buffer-string) "old")))
+      (kill-buffer buffer))))
+
 (ert-deftest textui-effect-follows-rendered-dependencies ()
   (let ((buffer (generate-new-buffer " *textui-effect-test*"))
         (dependency 'first)
