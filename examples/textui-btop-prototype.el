@@ -930,10 +930,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
      (current-buffer) 'btop-cpu #'textui-btop-prototype--cpu-elements)))
 
 (defun textui-btop-prototype--update-lower (updater)
-  "Apply state UPDATER and queue one refresh of the lower boxes."
-  (textui-update
-   (current-buffer) updater
-   :region 'btop-lower :producer #'textui-btop-prototype--lower-elements))
+  "Apply state UPDATER; TextUI reconciles the changed named region."
+  (textui-update (current-buffer) updater))
 
 (defun textui-btop-prototype--tick-buffer (buffer)
   "Start a real asynchronous sample for prototype BUFFER."

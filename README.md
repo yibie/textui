@@ -105,9 +105,11 @@ render. Calling `textui-open` later without that argument preserves the current
 state.
 
 `textui-update` passes the current value to an updater, stores its return value,
-and requests a full refresh. Several updates before Emacs processes its next
-timer event produce one refresh. If the updater signals an error, the old state
-is retained.
+and requests one refresh. Several updates before Emacs processes its next timer
+event are combined. When the frame keeps the same named-region structure,
+TextUI preserves unchanged regions and their widget.el objects; otherwise it
+falls back to a complete rebuild. If the updater signals an error, the old
+state is retained.
 
 This is deliberately smaller than a component system: TextUI does not provide
 component-local hooks, dependency tracking, or lifecycle phases. Register
@@ -261,10 +263,10 @@ widget, but it cannot shorten its label, editable area, or image glyph. See
 [`docs/widget-compatibility.md`](docs/widget-compatibility.md) for the tested
 sample of built-in and package-owned widgets.
 
-A widget's `:action` causes one automatic full refresh after a normal return,
-unless it already requested or performed a refresh. `widget.el` owns `:notify`;
-TextUI does not refresh implicitly after it. Call `textui-update` or a refresh
-function if a `:notify` callback changes other visible content.
+A widget's `:action` causes one automatic reconciled refresh after a normal
+return, unless it already requested or performed a refresh. `widget.el` owns
+`:notify`; TextUI does not refresh implicitly after it. Call `textui-update` or
+a refresh function if a `:notify` callback changes other visible content.
 
 ## Decide how to refresh
 
@@ -274,12 +276,12 @@ choose the smallest refresh that matches the change.
 | Change source                                               | What to call                                            |
 |-------------------------------------------------------------|---------------------------------------------------------|
 | `textui-state` changed                                      | `textui-update`                                         |
-| Native widget `:action` changed external state              | Nothing; TextUI performs one full refresh automatically |
+| Native widget `:action` changed external state              | Nothing; TextUI performs one refresh automatically      |
 | External data changed across the frame                      | `textui-request-refresh`                                |
 | A complete-line column must change immediately              | `textui-refresh-region`                                 |
 | Frequent external updates to one complete-line column       | `textui-request-refresh-region`                         |
 
-### Full refresh
+### Reconciled or full refresh
 
 Keep the buffer returned by `textui-open` and refresh it after external state
 changes:
@@ -297,7 +299,9 @@ changes:
 `textui-open` reuses one stable TextUI buffer with the requested name. It
 signals an error rather than taking over an existing non-TextUI buffer.
 `textui-request-refresh` combines a burst into one refresh on the next timer
-event; use `textui-refresh` when the rebuild must finish synchronously.
+event. It regenerates the frame description, patches only changed named regions
+when the surrounding frame is stable, and otherwise rebuilds the complete
+buffer. Use `textui-refresh` when a complete rebuild must finish synchronously.
 
 ### Bounded refresh
 
@@ -331,20 +335,23 @@ siblings. Region refresh keeps the region's current width. Use a full refresh
 when surrounding layout or window width may have changed.
 
 When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
-the buffer has already changed and does not follow it with an automatic full
+the buffer has already changed and does not follow it with another automatic
 refresh.
 
-`textui-update` can request the same bounded refresh while changing state:
+For ordinary state changes, no producer is needed. `textui-update` renders the
+new frame description and automatically preserves unchanged named regions:
 
 ```elisp
 (textui-update
  buffer
  (lambda (state)
-   (plist-put (copy-sequence state) :selected next-row))
- :region 'rows
- :producer (lambda (content-width)
-             (render-visible-row-elements content-width)))
+   (plist-put (copy-sequence state) :selected next-row)))
 ```
+
+This automatic path still computes the complete layout so it can safely detect
+structural changes. For high-frequency updates, pass `:region` and `:producer`
+to `textui-update`, or call a region refresh directly, to skip unrelated layout
+work.
 
 For bursts from timers and process callbacks, request the refresh instead:
 
@@ -403,8 +410,9 @@ row when the new content permits it.
 - One TextUI interface is one stable buffer. Your package may arrange several
   buffers with normal Emacs windows, but TextUI does not own that application
   shell.
-- State is one buffer-local Lisp value. TextUI does not infer dependencies or
-  provide component-local state and lifecycle hooks.
+- State is one buffer-local Lisp value. TextUI reconciles named regions but
+  does not infer Lisp dependencies or provide component-local state and
+  lifecycle hooks.
 - Native widgets are atomic and single-line. If one widget is wider than a very
   narrow window, Emacs decides whether to continue the line or scroll it.
 - A lone layout element may receive less than its declared `:min-width` when the
@@ -460,8 +468,8 @@ rule for extracting general capabilities from prototypes is recorded in
 | Function                                                    | Purpose                                                 |
 |-------------------------------------------------------------|---------------------------------------------------------|
 | `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
-| `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace buffer state and request one refresh            |
-| `(textui-request-refresh BUFFER)`                            | Coalesce and defer a complete-frame refresh             |
+| `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state and request one reconciled refresh        |
+| `(textui-request-refresh BUFFER)`                            | Coalesce and reconcile one frame refresh                |
 | `(textui-refresh BUFFER)`                                    | Rebuild the complete frame synchronously                |
 | `(textui-refresh-region BUFFER ID PRODUCER)`                 | Replace one named complete-line column immediately      |
 | `(textui-request-refresh-region BUFFER ID PRODUCER)`         | Coalesce and defer external updates to one named column |

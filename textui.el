@@ -75,12 +75,15 @@
 (defvar-local textui--refreshing nil)
 (defvar-local textui--widgets nil)
 (defvar-local textui--focus-anchors nil)
-(defvar-local textui--refresh-regions nil)
+(defvar-local textui--refresh-regions nil
+  "Installed (ID ELEMENT WIDTH FROM TO TEMPLATE) refresh-region records.")
 (defvar-local textui--region-refresh-requests nil)
 (defvar-local textui--region-refresh-timer nil)
 (defvar-local textui--refresh-timer nil)
 (defvar-local textui--cleanup-functions nil)
 (defvar-local textui--refresh-generation 0)
+(defvar-local textui--rendered-frame nil
+  "Last pre-widget rendered frame used for automatic reconciliation.")
 (defvar-local textui--focus-before-command nil)
 (defvar-local textui--position-before-command nil)
 (defvar-local textui--pending-focus nil)
@@ -940,7 +943,7 @@ Optional LIMITS caps each returned share."
 (defun textui--collect-refresh-region-spans (rendered)
   "Return collected refresh metadata with spans in RENDERED."
   (let (result)
-    (dolist (region textui--rendered-regions (nreverse result))
+    (dolist (region textui--rendered-regions result)
       (let ((span (textui--refresh-region-span rendered (car region))))
         (push (append region (list (car span) (cdr span))) result)))))
 
@@ -951,13 +954,14 @@ Optional LIMITS caps each returned share."
     (set-marker (nth 4 region) nil))
   (setq textui--refresh-regions nil))
 
-(defun textui--install-refresh-regions (regions)
-  "Install rendered REGIONS in the current buffer."
+(defun textui--install-refresh-regions (regions rendered)
+  "Install REGIONS and their templates from RENDERED in the current buffer."
   (textui--clear-refresh-regions)
   (dolist (region regions)
     (let ((from (copy-marker (+ (point-min) (nth 3 region))))
           (to (copy-marker (+ (point-min) (nth 4 region)))))
-      (push (list (nth 0 region) (nth 1 region) (nth 2 region) from to)
+      (push (list (nth 0 region) (nth 1 region) (nth 2 region) from to
+                  (substring rendered (nth 3 region) (nth 4 region)))
             textui--refresh-regions)))
   (setq textui--refresh-regions (nreverse textui--refresh-regions)))
 
@@ -1055,7 +1059,7 @@ Keep existing widget and focus records when APPEND is non-nil."
                           (and this-command
                                (list textui--focus-before-command
                                      textui--position-before-command))))
-                     (textui-refresh target-buffer)))
+                    (textui--reconcile target-buffer)))
                  result)))))
         (widget-apply widget :create)
         (put-text-property from (point) 'textui--location-id location-id)
@@ -1440,6 +1444,188 @@ Registering the same function object more than once has no effect."
       (forward-line (min (plist-get snapshot :row) max-row))
       (move-to-column (plist-get snapshot :column))))))
 
+(defun textui--render-current-frame (buffer)
+  "Return BUFFER's current (WIDTH RENDERED REGIONS) frame data."
+  (let ((width (textui--available-width buffer))
+        (textui--collect-refresh-regions t)
+        (textui--rendered-regions nil))
+    (let* ((frame (funcall textui--render-function width))
+           (specs (textui--prepare-frame frame))
+           (rendered (textui--render-specs specs width))
+           (regions (textui--collect-refresh-region-spans rendered)))
+      (list width rendered regions))))
+
+(defun textui--commit-full-frame (buffer width rendered regions)
+  "Commit a complete BUFFER frame described by WIDTH, RENDERED, and REGIONS."
+  (let* ((focus (if textui--focus-override
+                    (nth 0 textui--focus-override)
+                  (textui--capture-focus)))
+         (position (if textui--focus-override
+                       (nth 1 textui--focus-override)
+                     (textui--capture-position)))
+         (views (textui--capture-window-views buffer focus position))
+         (inhibit-read-only t))
+    (mapc #'widget-delete textui--widgets)
+    (setq textui--widgets nil)
+    (erase-buffer)
+    (insert rendered)
+    (goto-char (point-min))
+    (textui--materialize-placeholders buffer)
+    (textui--install-refresh-regions regions rendered)
+    (setq textui--rendered-frame rendered
+          textui--last-width width
+          textui--refresh-generation (1+ textui--refresh-generation))
+    (if textui--focus-override
+        (setq textui--pending-focus (list focus position views))
+      (textui--restore-focus focus position)
+      (textui--restore-window-views views))
+    (dolist (window (get-buffer-window-list buffer nil t))
+      (set-window-hscroll window 0))))
+
+(defun textui--installed-refresh-region-spans ()
+  "Return installed refresh regions with numeric cached-frame spans."
+  (let (spans valid)
+    (setq valid t)
+    (dolist (region textui--refresh-regions)
+      (let ((from (marker-position (nth 3 region)))
+            (to (marker-position (nth 4 region))))
+        (if (and from to)
+            (push (list (nth 0 region) (nth 1 region) (nth 2 region)
+                        (- from (point-min)) (- to (point-min)))
+                  spans)
+          (setq valid nil))))
+    (and valid (nreverse spans))))
+
+(defun textui--refresh-region-shell (rendered regions)
+  "Return RENDERED with every complete-line REGION replaced by its ID."
+  (let ((cursor 0)
+        parts)
+    (dolist (region regions)
+      (push (substring rendered cursor (nth 3 region)) parts)
+      (push (car region) parts)
+      (setq cursor (nth 4 region)))
+    (push (substring rendered cursor) parts)
+    (nreverse parts)))
+
+(defun textui--reconcile-region-pairs (width rendered regions)
+  "Return installed/new region pairs safe to patch, or nil for full refresh."
+  (let ((installed-spans (textui--installed-refresh-region-spans)))
+    (when (and textui--rendered-frame
+               (= width textui--last-width)
+               textui--refresh-regions
+               (= (length textui--rendered-frame)
+                  (- (point-max) (point-min)))
+               (= (length textui--refresh-regions) (length regions))
+               (cl-every #'eq (mapcar #'car textui--refresh-regions)
+                         (mapcar #'car regions))
+               (equal-including-properties
+                (textui--refresh-region-shell
+                 textui--rendered-frame installed-spans)
+                (textui--refresh-region-shell rendered regions)))
+      (cl-mapcar #'cons textui--refresh-regions regions))))
+
+(defun textui--replace-rendered-cache (from to replacement)
+  "Replace cached frame text from buffer positions FROM to TO with REPLACEMENT."
+  (when textui--rendered-frame
+    (let ((start (- from (point-min)))
+          (end (- to (point-min))))
+      (setq textui--rendered-frame
+            (concat (substring textui--rendered-frame 0 start)
+                    replacement
+                    (substring textui--rendered-frame end))))))
+
+(defun textui--refresh-region-templates-equal-p (left right)
+  "Return non-nil when LEFT and RIGHT differ only by generated location IDs."
+  (when (= (length left) (length right))
+    (let ((a (copy-sequence left))
+          (b (copy-sequence right)))
+      (remove-list-of-text-properties
+       0 (length a) '(textui--location-id) a)
+      (remove-list-of-text-properties
+       0 (length b) '(textui--location-id) b)
+      (equal-including-properties a b))))
+
+(defun textui--replace-refresh-region-template
+    (buffer region new-region replacement-text)
+  "Replace installed REGION in BUFFER from NEW-REGION and REPLACEMENT-TEXT."
+  (let* ((from-marker (nth 3 region))
+         (to-marker (nth 4 region))
+         (from (marker-position from-marker))
+         (to (marker-position to-marker))
+         (other-boundaries
+          (delq
+           nil
+           (mapcar
+            (lambda (other)
+              (unless (eq other region)
+                (list (nth 3 other) (marker-position (nth 3 other))
+                      (nth 4 other) (marker-position (nth 4 other)))))
+            textui--refresh-regions)))
+         (snapshot (textui--capture-region-point from to))
+         (delta (- (length replacement-text) (- to from)))
+         (content (string-remove-suffix "\n" replacement-text))
+         (max-row (max 0 (1- (length (split-string content "\n")))))
+         (inhibit-read-only t))
+    (textui--replace-rendered-cache from to replacement-text)
+    (textui--delete-widgets-in-region from to)
+    (delete-region from-marker to-marker)
+    (goto-char from-marker)
+    (insert replacement-text)
+    (set-marker from-marker from buffer)
+    (set-marker to-marker (+ from (length replacement-text)) buffer)
+    (textui--shift-focus-anchors-after-region from to delta)
+    (setf (nth 1 region) (nth 1 new-region)
+          (nth 2 region) (nth 2 new-region)
+          (nth 5 region) replacement-text)
+    (goto-char from-marker)
+    (textui--materialize-placeholders buffer from-marker to-marker t)
+    (set-marker from-marker from buffer)
+    (set-marker to-marker (+ from (length replacement-text)) buffer)
+    (dolist (boundary other-boundaries)
+      (set-marker (nth 0 boundary)
+                  (+ (nth 1 boundary)
+                     (if (>= (nth 1 boundary) to) delta 0))
+                  buffer)
+      (set-marker (nth 2 boundary)
+                  (+ (nth 3 boundary)
+                     (if (>= (nth 3 boundary) to) delta 0))
+                  buffer))
+    (setq textui--refresh-generation (1+ textui--refresh-generation))
+    (textui--restore-region-point snapshot from-marker max-row)
+    (force-mode-line-update)))
+
+(defun textui--reconcile (buffer)
+  "Render BUFFER and patch changed named regions when its frame shell is stable."
+  (if (not (buffer-live-p buffer))
+      nil
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'textui-mode)
+        (error "Not a TextUI buffer: %S" buffer))
+      (when textui--refreshing
+        (error "Reentrant TextUI refresh: %S" buffer))
+      (let* ((textui--refreshing t)
+             (frame (textui--render-current-frame buffer))
+             (width (nth 0 frame))
+             (rendered (nth 1 frame))
+             (regions (nth 2 frame))
+             (pairs (textui--reconcile-region-pairs width rendered regions)))
+        (if (not pairs)
+            (textui--commit-full-frame buffer width rendered regions)
+          (dolist (pair pairs)
+            (let* ((installed (car pair))
+                   (new (cdr pair))
+                   (template (substring rendered (nth 3 new) (nth 4 new))))
+              (if (textui--refresh-region-templates-equal-p
+                   (nth 5 installed) template)
+                  (setf (nth 1 installed) (nth 1 new)
+                        (nth 2 installed) (nth 2 new)
+                        (nth 5 installed) template)
+                (textui--replace-refresh-region-template
+                 buffer installed new template))))
+          (setq textui--rendered-frame rendered
+                textui--last-width width))
+        buffer))))
+
 (defun textui--run-requested-region-refreshes (buffer)
   "Run the latest queued region refreshes for live BUFFER."
   (when (buffer-live-p buffer)
@@ -1452,17 +1638,18 @@ Registering the same function object more than once has no effect."
             (textui-refresh-region buffer (car request) (cdr request))))))))
 
 (defun textui--run-requested-refresh (buffer)
-  "Run a queued full refresh for live BUFFER."
+  "Run a queued reconciled refresh for live BUFFER."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (when textui--refresh-timer
         (setq textui--refresh-timer nil)
-        (textui-refresh buffer)))))
+        (textui--reconcile buffer)))))
 
 ;;;###autoload
 (defun textui-request-refresh (buffer)
-  "Request one asynchronous full refresh of live TextUI BUFFER.
-Repeated pending requests are combined into one refresh."
+  "Request one asynchronous reconciled refresh of live TextUI BUFFER.
+Repeated pending requests are combined.  Changed named regions are patched;
+structural or width changes fall back to a complete rebuild."
   (if (not (buffer-live-p buffer))
       nil
     (with-current-buffer buffer
@@ -1507,8 +1694,9 @@ pending requests for the same BUFFER and ID keep only the latest PRODUCER."
 ;;;###autoload
 (cl-defun textui-update (buffer updater &key region producer)
   "Update live TextUI BUFFER state with UPDATER and request a refresh.
-UPDATER receives `textui-state' and returns its replacement.  With REGION,
-PRODUCER requests an existing refresh region instead of the full buffer."
+UPDATER receives `textui-state' and returns its replacement.  Without REGION,
+TextUI reconciles named regions and falls back to a complete rebuild.  With
+REGION, PRODUCER refreshes that existing region directly."
   (if (not (buffer-live-p buffer))
       nil
     (unless (functionp updater)
@@ -1552,17 +1740,6 @@ list of children for the existing column flex container."
                (to-marker (nth 4 region))
                (from (marker-position from-marker))
                (to (marker-position to-marker))
-               (other-boundaries
-                (delq
-                 nil
-                 (mapcar
-                  (lambda (other)
-                    (unless (eq other region)
-                      (list (nth 3 other)
-                            (marker-position (nth 3 other))
-                            (nth 4 other)
-                            (marker-position (nth 4 other)))))
-                  textui--refresh-regions)))
                (padding (or (plist-get element :padding) 0))
                (content-width
                 (max 0 (- width (* 2 padding)
@@ -1586,38 +1763,9 @@ list of children for the existing column flex container."
             (let* ((trailing-newline
                     (and (> to from) (= (char-before to) ?\n)))
                    (replacement-text
-                    (if trailing-newline (concat rendered "\n") rendered))
-                   (snapshot (textui--capture-region-point from to))
-                   (delta (- (length replacement-text) (- to from)))
-                   (max-row (max 0 (1- (length (split-string rendered "\n")))))
-                   (inhibit-read-only t))
-              (textui--delete-widgets-in-region from to)
-              (delete-region from-marker to-marker)
-              (goto-char from-marker)
-              (insert replacement-text)
-              (set-marker from-marker from (current-buffer))
-              (set-marker to-marker (+ from (length replacement-text))
-                          (current-buffer))
-              (textui--shift-focus-anchors-after-region from to delta)
-              (setf (nth 1 region) (nth 1 (car regions)))
-              (goto-char from-marker)
-              (textui--materialize-placeholders
-               buffer from-marker to-marker t)
-              (dolist (boundary other-boundaries)
-                (set-marker
-                 (nth 0 boundary)
-                 (+ (nth 1 boundary)
-                    (if (>= (nth 1 boundary) to) delta 0))
-                 buffer)
-                (set-marker
-                 (nth 2 boundary)
-                 (+ (nth 3 boundary)
-                    (if (>= (nth 3 boundary) to) delta 0))
-                 buffer))
-              (setq textui--refresh-generation
-                    (1+ textui--refresh-generation))
-              (textui--restore-region-point snapshot from-marker max-row)
-              (force-mode-line-update))))
+                    (if trailing-newline (concat rendered "\n") rendered)))
+              (textui--replace-refresh-region-template
+               buffer region (car regions) replacement-text))))
       buffer))))
 
 ;;;###autoload
@@ -1638,38 +1786,10 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
       (setq textui--refresh-timer nil
             textui--region-refresh-timer nil
             textui--region-refresh-requests nil)
-      (let ((textui--refreshing t)
-            (width (textui--available-width buffer))
-            (textui--collect-refresh-regions t)
-            (textui--rendered-regions nil))
-        (let* ((frame (funcall textui--render-function width))
-               (specs (textui--prepare-frame frame))
-               (rendered (textui--render-specs specs width))
-               (regions (textui--collect-refresh-region-spans rendered))
-               (focus (if textui--focus-override
-                          (nth 0 textui--focus-override)
-                        (textui--capture-focus)))
-               (position (if textui--focus-override
-                             (nth 1 textui--focus-override)
-                           (textui--capture-position)))
-               (views (textui--capture-window-views buffer focus position))
-               (inhibit-read-only t))
-          (mapc #'widget-delete textui--widgets)
-          (setq textui--widgets nil)
-          (erase-buffer)
-          (insert rendered)
-          (textui--install-refresh-regions regions)
-          (goto-char (point-min))
-          (textui--materialize-placeholders buffer)
-          (setq textui--last-width width
-                textui--refresh-generation
-                (1+ textui--refresh-generation))
-          (if textui--focus-override
-              (setq textui--pending-focus (list focus position views))
-            (textui--restore-focus focus position)
-            (textui--restore-window-views views))
-          (dolist (window (get-buffer-window-list buffer nil t))
-            (set-window-hscroll window 0))))
+      (let* ((textui--refreshing t)
+             (frame (textui--render-current-frame buffer)))
+        (textui--commit-full-frame
+         buffer (nth 0 frame) (nth 1 frame) (nth 2 frame)))
       buffer)))
 
 ;;;###autoload

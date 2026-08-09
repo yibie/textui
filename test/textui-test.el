@@ -530,7 +530,7 @@
           (should (equal (buffer-string) "[1]")))
       (kill-buffer buffer))))
 
-(ert-deftest textui-update-coalesces-state-and-full-refresh ()
+(ert-deftest textui-update-coalesces-state-and-refresh ()
   (let ((buffer (generate-new-buffer " *textui-state-test*"))
         (renders 0)
         (scheduled-count 0)
@@ -567,6 +567,110 @@
             (apply (car scheduled) (cdr scheduled))
             (should (= renders 2))
             (should (equal (buffer-string) "2"))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-update-reconciles-named-regions-automatically ()
+  (let ((buffer (generate-new-buffer " *textui-auto-region-test*"))
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 30
+           textui-state '(:count 0 :footer "A")
+           textui--render-function
+           (lambda (_width)
+             `((:type :flex :direction :column :gap 0
+                :children
+                ((:type :flex :direction :column :gap 0
+                  :layout (:refresh-id changing)
+                  :children
+                  ((:type item :format "%v"
+                    :value ,(number-to-string
+                             (plist-get textui-state :count)))))
+                 (:type :flex :direction :column :gap 0
+                  :layout (:refresh-id stable)
+                 :children
+                  ((:type push-button :value "Stable"
+                    :action ignore)))
+                 (:type item :format "%v"
+                  :value ,(plist-get textui-state :footer)))))))
+          (textui-refresh buffer)
+          (let ((stable
+                 (cl-find-if
+                  (lambda (widget)
+                    (equal (widget-value widget) "Stable"))
+                  textui--widgets)))
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function &rest arguments)
+                         (setq scheduled (cons function arguments))
+                         'auto-region-timer)))
+              (textui-update
+               buffer
+               (lambda (state)
+                 (plist-put (copy-sequence state) :count 1)))
+              (apply (car scheduled) (cdr scheduled)))
+            (should
+             (equal (mapcar #'string-trim-right
+                            (split-string (buffer-string) "\n"))
+                    '("1" "[Stable]" "A")))
+            (should
+             (eq stable
+                 (cl-find-if
+                  (lambda (widget)
+                    (equal (widget-value widget) "Stable"))
+                  textui--widgets)))
+            (textui-refresh-region
+             buffer 'stable
+             (lambda (_width)
+               '((:type push-button :value "Stable" :action ignore))))
+            (setq stable
+                  (cl-find-if
+                   (lambda (widget)
+                     (equal (widget-value widget) "Stable"))
+                   textui--widgets))
+            (textui-refresh-region
+             buffer 'changing
+             (lambda (_width)
+               '((:type item :format "%v" :value "manual"))))
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function &rest arguments)
+                         (setq scheduled (cons function arguments))
+                         'auto-region-after-manual-timer)))
+              (textui-update
+               buffer
+               (lambda (state)
+                 (plist-put (copy-sequence state) :count 2)))
+              (apply (car scheduled) (cdr scheduled)))
+            (should
+             (equal (mapcar #'string-trim-right
+                            (split-string (buffer-string) "\n"))
+                    '("2" "[Stable]" "A")))
+            (should
+             (eq stable
+                 (cl-find-if
+                  (lambda (widget)
+                    (equal (widget-value widget) "Stable"))
+                  textui--widgets)))
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (_time _repeat function &rest arguments)
+                         (setq scheduled (cons function arguments))
+                         'auto-region-fallback-timer)))
+              (textui-update
+               buffer
+               (lambda (state)
+                 (plist-put (copy-sequence state) :footer "B")))
+              (apply (car scheduled) (cdr scheduled)))
+            (should
+             (equal (mapcar #'string-trim-right
+                            (split-string (buffer-string) "\n"))
+                    '("2" "[Stable]" "B")))
+            (should-not
+             (eq stable
+                 (cl-find-if
+                  (lambda (widget)
+                    (equal (widget-value widget) "Stable"))
+                  textui--widgets)))))
       (kill-buffer buffer))))
 
 (ert-deftest textui-action-respects-state-update-requested-refresh ()
@@ -777,6 +881,10 @@
             (should (= scheduled-count 1))
             (apply (car scheduled) (cdr scheduled))
             (should (= calls 1))
+            (should
+             (= (marker-position
+                 (nth 4 (assq 'rows textui--refresh-regions)))
+                (point-max)))
             (should (equal (string-trim-right (buffer-string)) "latest"))
             (textui-request-refresh-region
              buffer 'rows
