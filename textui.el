@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: chenyibin
-;; Version: 0.1.0
+;; Version: 0.2.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, widgets
 
