@@ -50,7 +50,7 @@
   (let ((label (or (widget-get widget :tag)
                    (widget-get widget :value)
                    "")))
-    (concat "[ " (substitute-command-keys (format "%s" label)) " ]")))
+    (concat "[ " (format "%s" label) " ]")))
 
 (defun textui-widgets--button-value-create (widget)
   "Insert the rendered value for button WIDGET."
@@ -66,8 +66,38 @@
 
 (defun textui-widgets--checkbox-text (widget)
   "Return the text-only presentation for checkbox WIDGET."
-  (substitute-command-keys
-   (widget-get widget (if (widget-get widget :value) :on :off))))
+  (widget-get widget (if (widget-get widget :value) :on :off)))
+
+(defun textui-widgets--attach-button (widget from to)
+  "Attach button WIDGET to existing text from FROM to TO."
+  (widget-put widget :from (copy-marker from t))
+  (widget-put widget :to (copy-marker to nil))
+  (widget-put widget :delete #'widget-leave-text)
+  (widget-put widget :textui-attached t)
+  (widget-specify-button widget from to))
+
+(defun textui-widgets--checkbox-value-set (widget value)
+  "Set checkbox WIDGET to VALUE, preserving attached TextUI text."
+  (if (not (widget-get widget :textui-attached))
+      (widget-default-value-set widget value)
+    (let* ((from-marker (widget-get widget :from))
+           (to-marker (widget-get widget :to))
+           (from (marker-position from-marker))
+           (to (marker-position to-marker))
+           (overlay (widget-get widget :button-overlay))
+           (inhibit-read-only t)
+           (inhibit-modification-hooks t))
+      (when overlay
+        (delete-overlay overlay))
+      (widget-put widget :value value)
+      (let ((text (textui-widgets--checkbox-text widget)))
+        (save-excursion
+          (delete-region from to)
+          (goto-char from)
+          (insert text))
+        (set-marker from-marker from)
+        (set-marker to-marker (+ from (length text))))
+      (widget-specify-button widget from-marker to-marker))))
 
 (defun textui-widgets--field-text (widget)
   "Return the fixed-width presentation for editable field WIDGET."
@@ -79,12 +109,29 @@
       (error "TextUI field size must be a positive integer: %S" size))
     (concat value (make-string (max 0 (- size (length value))) ?\s))))
 
+(defun textui-widgets--delete-attached-field (widget)
+  "Detach an attached field WIDGET without deleting its text."
+  (setq widget-field-list (delq widget widget-field-list)
+        widget-field-new (delq widget widget-field-new))
+  (widget-leave-text widget))
+
+(defun textui-widgets--attach-field (widget from to)
+  "Attach editable field WIDGET to existing text from FROM to TO."
+  (let ((from-marker (copy-marker from t))
+        (to-marker (copy-marker to nil)))
+    (widget-put widget :from from-marker)
+    (widget-put widget :to to-marker)
+    (widget-put widget :delete #'textui-widgets--delete-attached-field)
+    (widget-specify-field widget from to)
+    (push widget widget-field-list)))
+
 (define-widget 'textui-button 'push-button
   "A padded text button implemented by widget.el."
   :format "%[%v%]"
   :value-create #'textui-widgets--button-value-create
   :button-face-get #'textui-widgets--button-face-get
-  :textui-measure #'textui-widgets--button-text)
+  :textui-measure #'textui-widgets--button-text
+  :textui-attach #'textui-widgets--attach-button)
 
 (define-widget 'textui-checkbox 'checkbox
   "A text-only checkbox implemented by widget.el."
@@ -94,14 +141,17 @@
   :on-glyph nil
   :off-glyph nil
   :button-face 'textui-checkbox-face
-  :textui-measure #'textui-widgets--checkbox-text)
+  :value-set #'textui-widgets--checkbox-value-set
+  :textui-measure #'textui-widgets--checkbox-text
+  :textui-attach #'textui-widgets--attach-button)
 
 (define-widget 'textui-field 'editable-field
   "A fixed-width editable field implemented by widget.el."
   :format "%v"
   :size 16
   :value-face 'textui-field-face
-  :textui-measure #'textui-widgets--field-text)
+  :textui-measure #'textui-widgets--field-text
+  :textui-attach #'textui-widgets--attach-field)
 
 (provide 'textui-widgets)
 ;;; textui-widgets.el ends here

@@ -1032,6 +1032,28 @@
                          '("one-a" "one-b" "two-a" "two-b" "footer"))))
       (kill-buffer buffer))))
 
+(ert-deftest textui-equal-length-region-refresh-reuses-rendered-cache ()
+  (let ((buffer (generate-new-buffer " *textui-region-cache-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 20
+                      textui--render-function
+                      (lambda (_width)
+                        '((:type :flex :direction :column :gap 0
+                           :layout (:refresh-id value)
+                           :children
+                           ((:type item :format "%v" :value "old"))))))
+          (textui-refresh buffer)
+          (let ((cached textui--rendered-frame))
+            (textui-refresh-region
+             buffer 'value
+             (lambda (_width)
+               '((:type item :format "%v" :value "new"))))
+            (should (eq cached textui--rendered-frame))
+            (should (string-match-p "new" (buffer-string)))))
+      (kill-buffer buffer))))
+
 (ert-deftest textui-request-refresh-region-coalesces-latest-producer ()
   (let ((buffer (generate-new-buffer " *textui-request-region-test*"))
         (calls 0)

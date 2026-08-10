@@ -8,15 +8,30 @@
 
 (define-widget 'textui-widgets-benchmark-button 'textui-button
   "TextUI button measured through ordinary widget creation."
-  :textui-measure nil)
+  :textui-measure nil
+  :textui-attach nil)
 
 (define-widget 'textui-widgets-benchmark-checkbox 'textui-checkbox
   "TextUI checkbox measured through ordinary widget creation."
-  :textui-measure nil)
+  :textui-measure nil
+  :textui-attach nil)
 
 (define-widget 'textui-widgets-benchmark-field 'textui-field
   "TextUI field measured through ordinary widget creation."
-  :textui-measure nil)
+  :textui-measure nil
+  :textui-attach nil)
+
+(define-widget 'textui-widgets-benchmark-measured-field 'textui-field
+  "TextUI field with intrinsic measurement but ordinary creation."
+  :textui-attach nil)
+
+(define-widget 'textui-widgets-benchmark-measured-button 'textui-button
+  "TextUI button with intrinsic measurement but ordinary creation."
+  :textui-attach nil)
+
+(define-widget 'textui-widgets-benchmark-measured-checkbox 'textui-checkbox
+  "TextUI checkbox with intrinsic measurement but ordinary creation."
+  :textui-attach nil)
 
 (defun textui-widgets-benchmark--controls (kind row)
   "Return three comparable controls of KIND for ROW."
@@ -34,6 +49,12 @@
           :value ,(zerop (% row 2)))
          (:type textui-widgets-benchmark-field :size 16 :value ,value)))
       ('intrinsic
+       `((:type textui-widgets-benchmark-measured-button :value ,label)
+         (:type textui-widgets-benchmark-measured-checkbox
+          :value ,(zerop (% row 2)))
+         (:type textui-widgets-benchmark-measured-field
+          :size 16 :value ,value)))
+      ('attached
        `((:type textui-button :value ,label)
          (:type textui-checkbox :value ,(zerop (% row 2)))
          (:type textui-field :size 16 :value ,value)))
@@ -95,7 +116,7 @@
     (princ (format "TextUI widgets: %d controls, median of %d runs\n"
                    (* rows 3) samples))
     (princ "kind       render+layout  full refresh\n")
-    (dolist (kind '(native semantic intrinsic))
+    (dolist (kind '(native semantic intrinsic attached))
       (let ((result
              (textui-widgets-benchmark--run-kind kind rows samples)))
         (princ
