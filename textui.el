@@ -1047,6 +1047,26 @@ Optional LIMITS caps each returned share."
               (remove-text-properties position end '(display nil)))))
         (setq position end)))))
 
+(defun textui--inset-widget-field-box (widget)
+  "Keep WIDGET's field face box inside its allocated character width."
+  (let* ((overlay (widget-get widget :field-overlay))
+         (face (and (overlayp overlay) (overlay-get overlay 'face)))
+         (box (and (facep face) (face-attribute face :box nil t)))
+         (line-width (and (listp box) (plist-get box :line-width)))
+         inset-width)
+    (cond
+     ((and (integerp line-width) (> line-width 0))
+      (setq inset-width (- line-width)))
+     ((and (consp line-width)
+           (integerp (car line-width))
+           (> (car line-width) 0))
+      (setq inset-width (cons (- (car line-width)) (cdr line-width)))))
+    (when inset-width
+      (overlay-put
+       overlay 'face
+       (list :inherit face :box
+             (plist-put (copy-tree box) :line-width inset-width))))))
+
 (defun textui--materialize-placeholders (buffer &optional from to append)
   "Replace placeholders for BUFFER between FROM and TO.
 Keep existing widget and focus records when APPEND is non-nil."
@@ -1128,7 +1148,9 @@ Keep existing widget and focus records when APPEND is non-nil."
                 (error "Duplicate focus ID: %S" focus-id))
               (push (list focus-id from actual-end)
                     textui--focus-anchors)))))))
-  (widget-setup))
+  (widget-setup)
+  (dolist (widget textui--widgets)
+    (textui--inset-widget-field-box widget)))
 
 (defun textui--capture-text-focus ()
   "Return point's semantic source position inside a width-aware text leaf."

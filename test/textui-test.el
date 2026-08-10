@@ -1347,6 +1347,33 @@
       (should-not (get-text-property 4 'display))
       (should (eq (get-text-property 4 'button) 'custom)))))
 
+(ert-deftest textui-widget-field-box-does-not-widen-its-layout-line ()
+  (let ((buffer (generate-new-buffer " *textui-field-box-test*"))
+        (face-attribute-function (symbol-function 'face-attribute)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 20
+                      textui--render-function
+                      (lambda (_width)
+                        '((:type editable-field :format "%v"
+                           :size 8 :value "Ada"))))
+          (cl-letf (((symbol-function 'face-attribute)
+                     (lambda (face attribute &optional frame inherit)
+                       (if (and (eq face 'widget-field)
+                                (eq attribute :box))
+                           '(:line-width (2 . -1))
+                         (funcall face-attribute-function
+                                  face attribute frame inherit)))))
+            (textui-refresh buffer))
+          (let* ((field (car widget-field-list))
+                 (overlay (widget-get field :field-overlay)))
+            (should
+             (equal (overlay-get overlay 'face)
+                    '(:inherit widget-field
+                      :box (:line-width (-2 . -1)))))))
+      (kill-buffer buffer))))
+
 (ert-deftest textui-measurement-error-leaves-old-buffer-untouched ()
   (let ((buffer (generate-new-buffer " *textui-measure-error-test*")))
     (unwind-protect
