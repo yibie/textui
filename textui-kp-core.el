@@ -357,14 +357,6 @@
   (+ (expt (+ 10 badness) 2)
      (if (> (abs (- previous current)) 1) 100 0)))
 
-(defun textui-kp-core--line-width
-    (prefix glue-ideals lead-spaces trail-spaces start end)
-  "Return the visible natural width of boxes START through END."
-  (let ((raw (- (aref prefix end) (aref prefix start)
-                (aref glue-ideals start))))
-    (- raw (min raw (+ (aref lead-spaces start)
-                       (aref trail-spaces end))))))
-
 (defun textui-kp-core--trace (backpointers end)
   "Return break positions ending at END through BACKPOINTERS."
   (let ((breaks (list end)))
@@ -374,8 +366,8 @@
     breaks))
 
 (defun textui-kp-core--optimize
-    (prefix glue-ideals lead-spaces trail-spaces breaks-ok line-width
-            extra-stretch emergency-stretch)
+    (prefix minimum maximum glue-ideals glue-shrinks glue-stretches
+            lead-spaces trail-spaces breaks-ok line-width emergency-stretch)
   "Run the fixed one-dimensional Knuth-Plass dynamic program."
   (let* ((n (1- (length prefix)))
          (emergency (> emergency-stretch 0))
@@ -395,35 +387,57 @@
           (aset backpointers start previous)
           (aset fitnesses start 0)))
       (when (aref costs start)
-        (let ((end (1+ start)))
+        (let* ((prefix-start (aref prefix start))
+               (minimum-start (aref minimum start))
+               (maximum-start (aref maximum start))
+               (lead-ideal (aref glue-ideals start))
+               (lead-minimum (- lead-ideal (aref glue-shrinks start)))
+               (lead-maximum (+ lead-ideal (aref glue-stretches start)))
+               (end (1+ start)))
           (catch 'overfull
             (while (<= end n)
               (if (not (or (= end n) (aref breaks-ok end)))
                   (setq end (1+ end))
                 (let* ((last (= end n))
                        (single (= end (1+ start)))
-                       (ideal (textui-kp-core--line-width
-                               prefix glue-ideals lead-spaces trail-spaces
-                               start end))
+                       (raw-ideal (- (aref prefix end)
+                                     prefix-start lead-ideal))
+                       (space-width
+                        (min raw-ideal
+                             (+ (aref lead-spaces start)
+                                (aref trail-spaces end))))
+                       (ideal (- raw-ideal space-width))
+                       (minimum-width
+                        (- (aref minimum end) minimum-start
+                           lead-minimum space-width))
+                       (maximum-width
+                        (- (aref maximum end) maximum-start
+                           lead-maximum space-width))
                        (adjustment (- line-width ideal))
-                       (flexibility (+ extra-stretch emergency-stretch)))
+                       (effective-maximum
+                        (+ maximum-width emergency-stretch)))
                   (cond
-                   ((or (< adjustment 0) (and last (< adjustment 0)))
+                   ((or (> minimum-width line-width)
+                        (and last (> ideal line-width)))
                     (when emergency
                       (let ((candidate (aref artificial end))
                             (cost (aref costs start)))
                         (when (or (null candidate) (< cost (car candidate)))
                           (aset artificial end (cons cost start)))))
                     (throw 'overfull nil))
-                   ((or (<= adjustment flexibility) last)
+                   ((or (<= minimum-width line-width effective-maximum)
+                        (and last (<= ideal line-width)))
                     (when emergency (aset surviving end t))
-                    (let* ((current-fitness
+                    (let* ((flexibility
+                            (if (> adjustment 0)
+                                (+ (- maximum-width ideal)
+                                   emergency-stretch)
+                              (- ideal minimum-width)))
+                           (current-fitness
                             (if last 1
-                              (if single
-                                  (if emergency
-                                      (textui-kp-core--fitness
-                                       adjustment emergency-stretch)
-                                    1)
+                              (if (and single
+                                       (not (and emergency (> adjustment 0))))
+                                  1
                                 (textui-kp-core--fitness
                                  adjustment flexibility))))
                            (line-cost
@@ -432,7 +446,9 @@
                               (textui-kp-core--demerits
                                (textui-kp-core--badness
                                 adjustment
-                                (if emergency emergency-stretch 1))
+                                (if (and emergency (> adjustment 0))
+                                    emergency-stretch
+                                  1))
                                (aref fitnesses start) current-fitness))
                              (last
                               (let ((ratio (/ (float ideal) line-width)))
@@ -472,7 +488,11 @@
            (mixed-space (max 0 (1- word-space)))
            (widths (textui-kp-core--measure-boxes boxes))
            (glue-ideals (make-vector n 0))
+           (glue-shrinks (make-vector n 0))
+           (glue-stretches (make-vector n 0))
            (prefix (make-vector (1+ n) 0))
+           (minimum (make-vector (1+ n) 0))
+           (maximum (make-vector (1+ n) 0))
            (lead-spaces (make-vector (1+ n) 0))
            (trail-spaces (make-vector (1+ n) 0))
            (breaks-ok (make-bool-vector (1+ n) t))
@@ -489,13 +509,22 @@
                and do (aset glue-types position 'nws))
       (dotimes (index n)
         (let* ((type (aref glue-types index))
-               (glue (cond ((eq type 'lws) word-space)
-                           ((eq type 'mws) mixed-space)
-                           (t 0)))
+               (glue (textui-kp-core--glue-ideal-pixel
+                      type word-space mixed-space))
+               (shrink (textui-kp-core--glue-shrink-pixel
+                        type word-space mixed-space))
+               (stretch (textui-kp-core--glue-stretch-pixel
+                         type word-space mixed-space))
                (box-width (aref widths index)))
           (aset glue-ideals index glue)
+          (aset glue-shrinks index shrink)
+          (aset glue-stretches index stretch)
           (aset prefix (1+ index)
                 (+ (aref prefix index) box-width glue))
+          (aset minimum (1+ index)
+                (+ (aref minimum index) box-width (- glue shrink)))
+          (aset maximum (1+ index)
+                (+ (aref maximum index) box-width glue stretch))
           (aset trail-spaces (1+ index)
                 (if (eq (car (aref types index)) 'space)
                     (+ (aref trail-spaces index) box-width)
@@ -507,15 +536,16 @@
                                (aref lead-spaces (1+ index)))
                           0)))
       (aset lead-spaces 0 0)
-      (let* ((extra (* 8 word-space))
-             (strict (textui-kp-core--optimize
-                      prefix glue-ideals lead-spaces trail-spaces breaks-ok
-                      line-pixel extra 0))
+      (let* ((strict (textui-kp-core--optimize
+                      prefix minimum maximum glue-ideals glue-shrinks
+                      glue-stretches lead-spaces trail-spaces breaks-ok
+                      line-pixel 0))
              (breaks
               (or strict
                   (textui-kp-core--optimize
-                   prefix glue-ideals lead-spaces trail-spaces breaks-ok
-                   line-pixel extra
+                   prefix minimum maximum glue-ideals glue-shrinks
+                   glue-stretches lead-spaces trail-spaces breaks-ok
+                   line-pixel
                    (* 3 (max 1 (textui-kp-core--pixel-width "M"))))))
              (start 0)
              (line-index 0)
@@ -545,6 +575,21 @@
     ('mws mixed-space)
     (_ 0)))
 
+(defun textui-kp-core--glue-stretch-pixel (type word-space mixed-space)
+  "Return TYPE's permitted stretch for WORD-SPACE and MIXED-SPACE."
+  (pcase type
+    ('lws (ceiling (/ (float word-space) 2)))
+    ('mws (ceiling (/ (float mixed-space) 2)))
+    ('cws 2)
+    (_ 0)))
+
+(defun textui-kp-core--glue-shrink-pixel (type word-space mixed-space)
+  "Return TYPE's permitted shrink for WORD-SPACE and MIXED-SPACE."
+  (pcase type
+    ('lws (ceiling (/ (float word-space) 3)))
+    ('mws (ceiling (/ (float mixed-space) 3)))
+    (_ 0)))
+
 (defun textui-kp-core--line-gaps (boxes types offsets)
   "Return adjustable gaps between BOXES at OFFSETS and TYPES."
   (let ((index 1)
@@ -563,8 +608,7 @@
 
 (defun textui-kp-core--add-glue-pixels
     (gaps pixels type remaining limit)
-  "Add REMAINING pixels to TYPE entries in PIXELS, capped by LIMIT.
-Return the pixels not assigned.  A nil LIMIT assigns all remaining pixels."
+  "Add REMAINING pixels to TYPE entries in PIXELS, capped by LIMIT."
   (let (indexes)
     (dotimes (index (length gaps))
       (when (eq (aref (aref gaps index) 0) type)
@@ -573,9 +617,7 @@ Return the pixels not assigned.  A nil LIMIT assigns all remaining pixels."
     (if (or (null indexes) (<= remaining 0))
         remaining
       (let* ((count (length indexes))
-             (used (if limit
-                       (min remaining (* count limit))
-                     remaining))
+             (used (min remaining (* count limit)))
              (share (/ used count))
              (extra (% used count))
              (position 0))
@@ -585,6 +627,57 @@ Return the pixels not assigned.  A nil LIMIT assigns all remaining pixels."
                    (if (< position extra) 1 0)))
           (setq position (1+ position)))
         (- remaining used)))))
+
+(defun textui-kp-core--remove-glue-pixels
+    (gaps pixels type remaining limit)
+  "Remove up to LIMIT pixels from TYPE entries until REMAINING is zero."
+  (let (indexes)
+    (dotimes (index (length gaps))
+      (when (eq (aref (aref gaps index) 0) type)
+        (push index indexes)))
+    (setq indexes (nreverse indexes))
+    (if (or (null indexes) (<= remaining 0))
+        remaining
+      (let* ((count (length indexes))
+             (used (min remaining (* count limit)))
+             (share (/ used count))
+             (extra (% used count))
+             (position 0))
+        (dolist (index indexes)
+          (aset pixels index
+                (- (aref pixels index) share
+                   (if (< position extra) 1 0)))
+          (setq position (1+ position)))
+        (- remaining used)))))
+
+(defun textui-kp-core--emergency-glue-pixels
+    (gaps pixels adjustment word-space mixed-space)
+  "Distribute ADJUSTMENT across GAPS in proportion to their stretch."
+  (let ((weights (make-vector (length gaps) 0))
+        (total 0)
+        (used 0)
+        remainders)
+    (dotimes (index (length gaps))
+      (let ((weight (textui-kp-core--glue-stretch-pixel
+                     (aref (aref gaps index) 0) word-space mixed-space)))
+        (aset weights index weight)
+        (setq total (+ total weight))))
+    (when (> total 0)
+      (dotimes (index (length gaps))
+        (let* ((numerator (* adjustment (aref weights index)))
+               (share (/ numerator total)))
+          (aset pixels index (+ (aref pixels index) share))
+          (setq used (+ used share))
+          (push (cons (% numerator total) index) remainders)))
+      (setq remainders
+            (sort remainders
+                  (lambda (left right)
+                    (if (= (car left) (car right))
+                        (< (cdr left) (cdr right))
+                      (> (car left) (car right))))))
+      (dotimes (index (- adjustment used))
+        (cl-incf (aref pixels (cdr (nth index remainders))))))
+    (> total 0)))
 
 (defun textui-kp-core--pixel-space (pixels)
   "Return one display-only space occupying PIXELS pixels."
@@ -635,29 +728,51 @@ LAST-LINE keeps its natural ragged-right spacing."
           (setq ideal-pixels (+ ideal-pixels ideal))))
       (if (= (length gaps) 0)
           line
-        (let ((remaining (max 0 (- line-pixel box-pixels ideal-pixels))))
-          (setq remaining
-                (textui-kp-core--add-glue-pixels
-                 gaps pixels 'lws remaining
-                 (max 1 (round (* word-space 0.5)))))
-          (setq remaining
-                (textui-kp-core--add-glue-pixels
-                 gaps pixels 'mws remaining
-                 (max 0 (round (* mixed-space 0.5)))))
-          (setq remaining
-                (textui-kp-core--add-glue-pixels
-                 gaps pixels 'cws remaining nil))
+        (let* ((adjustment (- line-pixel box-pixels ideal-pixels))
+               (stretch (cl-loop for gap across gaps
+                                 sum (textui-kp-core--glue-stretch-pixel
+                                      (aref gap 0) word-space mixed-space))))
+          (if (and (> adjustment stretch)
+                   (textui-kp-core--emergency-glue-pixels
+                    gaps pixels adjustment word-space mixed-space))
+              (setq adjustment 0)
+            (if (> adjustment 0)
+                (progn
+                  (setq adjustment
+                        (textui-kp-core--add-glue-pixels
+                         gaps pixels 'lws adjustment
+                         (textui-kp-core--glue-stretch-pixel
+                          'lws word-space mixed-space)))
+                  (setq adjustment
+                        (textui-kp-core--add-glue-pixels
+                         gaps pixels 'mws adjustment
+                         (textui-kp-core--glue-stretch-pixel
+                          'mws word-space mixed-space)))
+                  (setq adjustment
+                        (textui-kp-core--add-glue-pixels
+                         gaps pixels 'cws adjustment
+                         (textui-kp-core--glue-stretch-pixel
+                          'cws word-space mixed-space))))
+              (setq adjustment (- adjustment))
+              (setq adjustment
+                    (textui-kp-core--remove-glue-pixels
+                     gaps pixels 'lws adjustment
+                     (textui-kp-core--glue-shrink-pixel
+                      'lws word-space mixed-space)))
+              (setq adjustment
+                    (textui-kp-core--remove-glue-pixels
+                     gaps pixels 'mws adjustment
+                     (textui-kp-core--glue-shrink-pixel
+                      'mws word-space mixed-space)))))
           (let ((index (1- (length gaps))))
             (while (>= index 0)
               (setq line
                     (textui-kp-core--apply-gap
                      line (aref gaps index) (aref pixels index)))
               (setq index (1- index))))
-          (when (> remaining 0)
-            (setq line (concat line
-                               (textui-kp-core--pixel-space remaining))))
-          (put-text-property 0 (length line)
-                             'textui--pixel-justified t line)
+          (when (= adjustment 0)
+            (put-text-property 0 (length line)
+                               'textui--pixel-justified t line))
           line)))))
 
 (defun textui-kp-core-justify-lines (source attributed line-pixel)

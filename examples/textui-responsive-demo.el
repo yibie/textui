@@ -10,10 +10,10 @@
 (defvar textui-responsive-demo-count 0)
 (defvar textui-responsive-demo-name "Ada")
 
-(defun textui-responsive-demo--card (title children)
+(defun textui-responsive-demo--card (title children &optional minimum-width)
   "Return one responsive card named TITLE containing CHILDREN."
   `(:type :flex :direction :column :gap 0 :padding 1 :border t
-    :layout (:width 22 :min-width 16 :grow 1)
+    :layout (:width 22 :min-width ,(or minimum-width 16) :grow 1)
     :children
     ((:type item :format "%v" :value ,title)
      ,@children)))
@@ -50,7 +50,8 @@
       ,(textui-responsive-demo--card
         "Pixel-justified text"
         '((:type :text
-           :value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation.")))))))
+           :value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation."))
+        26)))))
 
 (let ((buffer (textui-open "*TextUI Responsive Demo*"
                            #'textui-responsive-demo--frame)))

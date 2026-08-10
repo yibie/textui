@@ -268,22 +268,24 @@ Use `:text` for prose that must wrap. A native `item` remains one atomic line.
 ```
 
 TextUI subtracts the parent's border and padding, converts the remaining cells
-to pixels, and applies its vendored Knuth–Plass core. Non-final lines distribute
-Latin, CJK/Latin, and CJK spacing to reach the content width. The last line of a
-paragraph remains naturally ragged-right. Source characters and source offsets
-are retained so point can follow the same text after reflow.
+to pixels, and applies its vendored Knuth–Plass core. The optimizer chooses
+breaks globally from each real gap's ideal, shrink, and stretch widths. Non-final
+lines then distribute the required adjustment through those gaps; they do not
+fake a full line with trailing filler. The last line remains naturally
+ragged-right. Source characters and source offsets are retained so point can
+follow the same text after reflow.
 
 The Knuth–Plass implementation in `textui-kp-core.el` is adapted from Kinney
-Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp). TextUI vendors the
-smaller subset it needs for pixel measurement, Latin/CJK boxing, kinsoku rules,
-line breaking, and glue allocation, so packages using TextUI do not need a
-separate `emacs-kp` installation.
+Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp), specifically
+[`e823d89`](https://github.com/Kinneyzhang/emacs-kp/commit/e823d89a4a5097dce0316ba66c83cf44e98f3aa8).
+TextUI vendors the smaller subset it needs for pixel measurement, Latin/CJK
+boxing, kinsoku rules, global line breaking, and glue allocation, so packages
+using TextUI do not need a separate `emacs-kp` installation.
 
 Give justified prose a reasonable minimum width. At very narrow widths,
-Knuth–Plass may need visibly wide word spacing or trailing glue to fill a line.
-That is valid output, but usually not pleasant reading. A package that supports
-such a narrow window should return a more compact frame or place the prose on a
-row of its own.
+the emergency pass may need visibly wide word spacing to fill a line. A package
+that supports such a narrow window should return a more compact frame or place
+the prose on a row of its own.
 
 ### Images
 
@@ -582,6 +584,7 @@ emacs -Q --batch -L . -L examples -L test \
   -l test/textui-grid-gallery-test.el \
   -l test/textui-widget-compatibility-test.el \
   -l test/textui-tui-app-test.el \
+  -l test/textui-widgets-test.el \
   -f ert-run-tests-batch-and-exit
 ```
 

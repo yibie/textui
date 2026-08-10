@@ -81,8 +81,6 @@
 (defvar textui--current-effect-token nil
   "Dynamically bound token of the lifecycle effect being started.")
 
-(declare-function textui-kp-core-break-lines
-                  "textui-kp-core" (string line-pixel))
 (declare-function textui-kp-core-justify-lines
                   "textui-kp-core" (source attributed line-pixel))
 
@@ -548,22 +546,26 @@ Optional LIMITS caps each returned share."
                           (min overflow capacity) capacities capacities)))
         (cl-mapcar #'- starts reductions))))))
 
+(defun textui--rendered-string-width (string)
+  "Return STRING's displayed width in TextUI cells."
+  (if (and (> (length string) 0)
+           (text-property-not-all
+            0 (length string) 'textui--pixel-justified nil string))
+      (ceiling (/ (float (string-pixel-width string))
+                  (max 1 (string-pixel-width " "))))
+    (string-width string)))
+
 (defun textui--pad-right (string width)
   "Pad STRING with spaces to at least display WIDTH."
-  (let ((missing (- width (string-width string))))
+  (let ((missing (- width (textui--rendered-string-width string))))
     (if (> missing 0)
-        (let ((padding (make-string missing ?\s)))
-          (when (and (> (length string) 0)
-                     (get-text-property 0 'textui--pixel-justified string))
-            (put-text-property 0 missing 'display
-                               '(space :width (0)) padding))
-          (concat string padding))
+        (concat string (make-string missing ?\s))
       string)))
 
 (defun textui--block-width (lines)
   "Return the widest display width in LINES."
   (if lines
-      (apply #'max (mapcar #'string-width lines))
+      (apply #'max (mapcar #'textui--rendered-string-width lines))
     0))
 
 ;;;; Width-aware text
@@ -575,11 +577,6 @@ Optional LIMITS caps each returned share."
   "Return the pixel measure corresponding to WIDTH text cells."
   (max 1
        (string-pixel-width (make-string (max 1 width) ?\s))))
-
-(defun textui--text-break-ranges (string pixel-width)
-  "Return source ranges selected for STRING at PIXEL-WIDTH."
-  (require 'textui-kp-core)
-  (textui-kp-core-break-lines string pixel-width))
 
 (defun textui--text-hard-line-ranges (string)
   "Return source ranges in STRING separated by hard newlines."
