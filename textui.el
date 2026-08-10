@@ -339,27 +339,40 @@ Re-registering TYPE replaces the previous function.  Return TYPE."
     result))
 
 (defun textui--measure-native (element)
-  "Create native widget ELEMENT temporarily and return its placeholder text."
+  "Measure native widget ELEMENT and return its placeholder text.
+Use its optional `:textui-measure' function without creating it."
   (with-temp-buffer
-    (let ((start (point))
-          (location-id
-           (when (integerp textui--next-location-id)
-             (prog1 textui--next-location-id
-               (setq textui--next-location-id
-                     (1+ textui--next-location-id))))))
-      (apply #'widget-create (plist-get element :type)
-             (textui--widget-args element))
-      (let ((text (buffer-substring-no-properties start (point))))
-        (when (string-match-p "\n" text)
-          (error "Native widget must render exactly one line: %S" element))
-        (when (= (length text) 0)
-          (error "Native widget must render at least one character: %S" element))
-        (add-text-properties
-         0 (length text)
-         (list 'textui--placeholder element
-               'textui--location-id location-id)
-         text)
-        text))))
+    (let* ((start (point))
+           (widget (apply #'widget-convert (plist-get element :type)
+                          (textui--widget-args element)))
+           (measure (widget-get widget :textui-measure))
+           (location-id
+            (when (integerp textui--next-location-id)
+              (prog1 textui--next-location-id
+                (setq textui--next-location-id
+                      (1+ textui--next-location-id)))))
+           (text
+            (if measure
+                (progn
+                  (unless (functionp measure)
+                    (error "Widget :textui-measure is not a function: %S"
+                           measure))
+                  (funcall measure widget))
+              (widget-apply widget :create)
+              (buffer-substring-no-properties start (point)))))
+      (unless (stringp text)
+        (error "Widget :textui-measure must return a string: %S" text))
+      (setq text (copy-sequence text))
+      (when (string-match-p "\n" text)
+        (error "Native widget must render exactly one line: %S" element))
+      (when (= (length text) 0)
+        (error "Native widget must render at least one character: %S" element))
+      (add-text-properties
+       0 (length text)
+       (list 'textui--placeholder element
+             'textui--location-id location-id)
+       text)
+      text)))
 
 (defun textui--sum (numbers)
   "Return the sum of NUMBERS."
