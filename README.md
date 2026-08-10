@@ -68,35 +68,32 @@ independently refreshed regions. More recordings cover
 [the 10,000-row K9s viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif),
 and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-TextUI 0.3.0 makes large native-widget interfaces cheaper to refresh and makes
-pixel-justified text safe at narrow widths, without replacing `widget.el`.
+TextUI 0.4.0 lets existing package-owned `widget.el` types opt into the same
+fast rendering path used by `textui-widgets`, without registration or a second
+widget hierarchy.
 
 Highlights:
 
-- Adds the optional `textui-widgets` library with text-only button, checkbox,
-  and editable-field types that retain native `widget.el` behavior.
-- Reuses rendered placeholders when attaching those controls, avoiding the
-  delete-and-recreate work paid by generic widgets on every full refresh.
-- Uses real per-gap ideal, shrink, and stretch widths in the vendored
-  Knuth–Plass implementation.
-- Prevents identifier break points from counting as visible spaces and falls
-  back to natural ragged-right wrapping before an emergency line can overflow.
-- Fixes editable-field and display-glyph width accounting inside bordered
-  layouts.
-- Keeps the diagnostic widget benchmarks under `test/performance/` so the
-  native, semantic, intrinsic, and attached paths remain directly comparable.
-- Records the platform-native design constraints that keep TextUI an extension
-  of Emacs rather than a second widget system.
+- Makes the inherited `:textui-measure` and `:textui-attach` widget fields the
+  public fast-path protocol.
+- Exports measurement and attachment helpers for buttons, text checkboxes, and
+  editable fields.
+- Preserves each custom type's action, notification, validation, and keymap;
+  only measurement and buffer attachment are accelerated.
+- Keeps `textui-button`, `textui-checkbox`, and `textui-field` as ready-made
+  convenience types rather than mandatory replacements.
+- Documents the extension contract and its invariants in
+  [ADR 0034](docs/adr/0034-widget-types-declare-optional-fast-paths.md).
 
 On the release machine, a full refresh of 3,000 attached controls measured
-242.79 ms versus 600.89 ms for the generic native path. These figures describe
+238.58 ms versus 596.55 ms for the generic native path. These figures describe
 that fixture and machine, not a cross-system guarantee.
 
 Verification:
 
-- 102 ERT tests pass.
+- 105 ERT tests pass.
 - Byte compilation passes with warnings treated as errors.
 - Requires Emacs 29.1 or later.
 
