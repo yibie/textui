@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 chenyibin
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
-;; Package-Requires: ((emacs "29.1") (textui "0.2.0"))
+;; Package-Requires: ((emacs "29.1") (textui "0.3.0"))
 ;; Keywords: convenience, widgets
 
 ;;; Commentary:

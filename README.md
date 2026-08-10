@@ -68,29 +68,35 @@ independently refreshed regions. More recordings cover
 [the 10,000-row K9s viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif),
 and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
-## What's new in 0.2.0
+## What's new in 0.3.0
 
-TextUI 0.2.0 adds buffer runtime coordination while keeping Emacs `widget.el`
-as the control system.
+TextUI 0.3.0 makes large native-widget interfaces cheaper to refresh and makes
+pixel-justified text safe at narrow widths, without replacing `widget.el`.
 
 Highlights:
 
-- Routes top-level plist state changes to named refresh regions.
-- Coalesces repeated regional updates and falls back to full reconciliation for
-  structural changes.
-- Adds dependency-aware lifecycle effects for timers, processes, and cleanup.
-- Adds lifecycle-safe async callbacks that ignore stale work.
-- Updates the btop prototype to use automatic state routing and managed live
-  sampling.
-- Documents the new state, effect, and regional refresh interfaces.
+- Adds the optional `textui-widgets` library with text-only button, checkbox,
+  and editable-field types that retain native `widget.el` behavior.
+- Reuses rendered placeholders when attaching those controls, avoiding the
+  delete-and-recreate work paid by generic widgets on every full refresh.
+- Uses real per-gap ideal, shrink, and stretch widths in the vendored
+  Knuth–Plass implementation.
+- Prevents identifier break points from counting as visible spaces and falls
+  back to natural ragged-right wrapping before an emergency line can overflow.
+- Fixes editable-field and display-glyph width accounting inside bordered
+  layouts.
+- Keeps the diagnostic widget benchmarks under `test/performance/` so the
+  native, semantic, intrinsic, and attached paths remain directly comparable.
+- Records the platform-native design constraints that keep TextUI an extension
+  of Emacs rather than a second widget system.
 
-In the btop 50-process fixture, the routed details update improved from a
-median of 11.65 ms to 5.67 ms, about 2.05x faster, while continuing to use
-native `widget.el` push-button rows.
+On the release machine, a full refresh of 3,000 attached controls measured
+242.79 ms versus 600.89 ms for the generic native path. These figures describe
+that fixture and machine, not a cross-system guarantee.
 
 Verification:
 
-- 87 ERT tests pass.
+- 102 ERT tests pass.
 - Byte compilation passes with warnings treated as errors.
 - Requires Emacs 29.1 or later.
 
