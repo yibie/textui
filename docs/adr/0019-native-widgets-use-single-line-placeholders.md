@@ -1,5 +1,9 @@
 # Native widgets use single-line placeholders
 
+Placeholder geometry remains unchanged, while
+[ADR 0034](0034-widget-types-declare-optional-fast-paths.md) allows a widget
+type to measure and attach without running its ordinary creation path.
+
 TextUI v1 requires each native widget to present exactly one logical line;
 multi-line interfaces are composed from those leaves with TextUI layout
 elements. Measurement creates the widget in a temporary buffer, copies its plain

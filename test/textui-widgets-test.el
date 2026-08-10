@@ -36,6 +36,44 @@
   "Widget attached to the already rendered placeholder text."
   :textui-attach #'textui-widgets-test--attach-item)
 
+(define-widget 'textui-widgets-test-field-button 'push-button
+  "Existing package widget opting into TextUI's fast path with fields."
+  :format "%[%v%]"
+  :value-create
+  (lambda (widget)
+    (setq textui-widgets-test--creates
+          (1+ textui-widgets-test--creates))
+    (insert (format "[ %s ]" (widget-value widget))))
+  :textui-measure #'textui-widgets-measure-button
+  :textui-attach #'textui-widgets-attach-button)
+
+(define-widget 'textui-widgets-test-field-checkbox 'checkbox
+  "Existing checkbox opting into TextUI's fast path with fields."
+  :format "%[%v%]"
+  :on "[x]"
+  :off "[ ]"
+  :on-glyph nil
+  :off-glyph nil
+  :value-create
+  (lambda (widget)
+    (setq textui-widgets-test--creates
+          (1+ textui-widgets-test--creates))
+    (insert (widget-get widget (if (widget-value widget) :on :off))))
+  :textui-measure #'textui-widgets-measure-checkbox
+  :textui-attach #'textui-widgets-attach-checkbox)
+
+(define-widget 'textui-widgets-test-field-input 'editable-field
+  "Existing field opting into TextUI's fast path with fields."
+  :format "%v"
+  :size 8
+  :value-create
+  (lambda (widget)
+    (setq textui-widgets-test--creates
+          (1+ textui-widgets-test--creates))
+    (widget-field-value-create widget))
+  :textui-measure #'textui-widgets-measure-field
+  :textui-attach #'textui-widgets-attach-field)
+
 (defun textui-widgets-test--actual-text (element)
   "Create ELEMENT with widget.el and return its plain text."
   (with-temp-buffer
@@ -86,6 +124,72 @@
           (should (= textui-widgets-test--attaches 1))
           (should (equal (buffer-string) "fast"))
           (should (= (length textui--widgets) 1)))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-custom-widget-fields-enable-button-fast-path ()
+  (let ((textui-widgets-test--creates 0)
+        (activations 0)
+        (buffer (generate-new-buffer " *textui-field-button-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 20
+           textui--render-function
+           (lambda (_width)
+             `((:type textui-widgets-test-field-button
+                :value "Save"
+                :action ,(lambda (&rest _)
+                           (setq activations (1+ activations)))))))
+          (textui-refresh buffer)
+          (should (equal (buffer-string) "[ Save ]"))
+          (should (= textui-widgets-test--creates 0))
+          (widget-apply (car textui--widgets) :action)
+          (should (= activations 1))
+          (should (= textui-widgets-test--creates 0)))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-custom-widget-fields-enable-checkbox-fast-path ()
+  (let ((textui-widgets-test--creates 0)
+        (checked nil)
+        (buffer (generate-new-buffer " *textui-field-checkbox-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 20
+           textui--render-function
+           (lambda (_width)
+             `((:type textui-widgets-test-field-checkbox
+                :value ,checked
+                :notify ,(lambda (widget &rest _)
+                           (setq checked (widget-value widget)))))))
+          (textui-refresh buffer)
+          (should (equal (buffer-string) "[ ]"))
+          (should (= textui-widgets-test--creates 0))
+          (widget-apply (car textui--widgets) :action)
+          (should checked)
+          (should (equal (buffer-string) "[x]"))
+          (should (= textui-widgets-test--creates 0)))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-custom-widget-fields-enable-field-fast-path ()
+  (let ((textui-widgets-test--creates 0)
+        (buffer (generate-new-buffer " *textui-field-input-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 20
+           textui--render-function
+           (lambda (_width)
+             '((:type textui-widgets-test-field-input
+                :size 8 :value "Ada"))))
+          (textui-refresh buffer)
+          (should (equal (buffer-string) "Ada     "))
+          (should (= textui-widgets-test--creates 0))
+          (should (= (length widget-field-list) 1))
+          (should (equal (widget-value (car textui--widgets)) "Ada")))
       (kill-buffer buffer))))
 
 (ert-deftest textui-semantic-widget-measurements-match-widget-output ()

@@ -8,8 +8,11 @@
 
 ;;; Commentary:
 
-;; This experimental optional library keeps control behavior in widget.el and
-;; adds three predictable, text-only controls for TextUI layouts.
+;; This optional library provides reusable implementations of TextUI's
+;; `:textui-measure' and `:textui-attach' widget type properties.  Existing
+;; package widgets may opt into the fast path by adding the matching functions
+;; to their ordinary `define-widget' definitions.  The three `textui-*' widget
+;; types below are convenience presets, not a separate control system.
 
 ;;; Code:
 
@@ -45,8 +48,9 @@
   "TextUI editable field face."
   :group 'widgets)
 
-(defun textui-widgets--button-text (widget)
-  "Return the rendered text for button WIDGET."
+(defun textui-widgets-measure-button (widget)
+  "Return WIDGET's padded, single-line button presentation.
+The result must equal WIDGET's actual presentation outside TextUI."
   (let ((label (or (widget-get widget :tag)
                    (widget-get widget :value)
                    "")))
@@ -54,7 +58,7 @@
 
 (defun textui-widgets--button-value-create (widget)
   "Insert the rendered value for button WIDGET."
-  (insert (textui-widgets--button-text widget)))
+  (insert (textui-widgets-measure-button widget)))
 
 (defun textui-widgets--button-face-get (widget)
   "Return the semantic face selected by button WIDGET."
@@ -64,12 +68,14 @@
     ('muted 'textui-button-muted-face)
     (_ 'textui-button-face)))
 
-(defun textui-widgets--checkbox-text (widget)
-  "Return the text-only presentation for checkbox WIDGET."
+(defun textui-widgets-measure-checkbox (widget)
+  "Return WIDGET's text-only checkbox presentation as a string.
+The result uses WIDGET's `:on' or `:off' property."
   (widget-get widget (if (widget-get widget :value) :on :off)))
 
-(defun textui-widgets--attach-button (widget from to)
-  "Attach button WIDGET to existing text from FROM to TO."
+(defun textui-widgets-attach-button (widget from to)
+  "Attach button WIDGET to existing TextUI text from FROM to TO.
+The text must equal the result of WIDGET's `:textui-measure' function."
   (widget-put widget :from (copy-marker from t))
   (widget-put widget :to (copy-marker to nil))
   (widget-put widget :delete #'widget-leave-text)
@@ -90,7 +96,7 @@
       (when overlay
         (delete-overlay overlay))
       (widget-put widget :value value)
-      (let ((text (textui-widgets--checkbox-text widget)))
+      (let ((text (textui-widgets-measure-checkbox widget)))
         (save-excursion
           (delete-region from to)
           (goto-char from)
@@ -99,8 +105,15 @@
         (set-marker to-marker (+ from (length text))))
       (widget-specify-button widget from-marker to-marker))))
 
-(defun textui-widgets--field-text (widget)
-  "Return the fixed-width presentation for editable field WIDGET."
+(defun textui-widgets-attach-checkbox (widget from to)
+  "Attach checkbox WIDGET to existing TextUI text from FROM to TO.
+Install the value setter needed to update attached text in place."
+  (widget-put widget :value-set #'textui-widgets--checkbox-value-set)
+  (textui-widgets-attach-button widget from to))
+
+(defun textui-widgets-measure-field (widget)
+  "Return WIDGET's fixed-width editable-field presentation as a string.
+WIDGET must have a string `:value' and a positive integer `:size'."
   (let ((value (widget-get widget :value))
         (size (widget-get widget :size)))
     (unless (stringp value)
@@ -115,8 +128,9 @@
         widget-field-new (delq widget widget-field-new))
   (widget-leave-text widget))
 
-(defun textui-widgets--attach-field (widget from to)
-  "Attach editable field WIDGET to existing text from FROM to TO."
+(defun textui-widgets-attach-field (widget from to)
+  "Attach editable field WIDGET to existing TextUI text from FROM to TO.
+Register WIDGET with widget.el's ordinary editable-field machinery."
   (let ((from-marker (copy-marker from t))
         (to-marker (copy-marker to nil)))
     (widget-put widget :from from-marker)
@@ -130,8 +144,8 @@
   :format "%[%v%]"
   :value-create #'textui-widgets--button-value-create
   :button-face-get #'textui-widgets--button-face-get
-  :textui-measure #'textui-widgets--button-text
-  :textui-attach #'textui-widgets--attach-button)
+  :textui-measure #'textui-widgets-measure-button
+  :textui-attach #'textui-widgets-attach-button)
 
 (define-widget 'textui-checkbox 'checkbox
   "A text-only checkbox implemented by widget.el."
@@ -142,16 +156,16 @@
   :off-glyph nil
   :button-face 'textui-checkbox-face
   :value-set #'textui-widgets--checkbox-value-set
-  :textui-measure #'textui-widgets--checkbox-text
-  :textui-attach #'textui-widgets--attach-button)
+  :textui-measure #'textui-widgets-measure-checkbox
+  :textui-attach #'textui-widgets-attach-checkbox)
 
 (define-widget 'textui-field 'editable-field
   "A fixed-width editable field implemented by widget.el."
   :format "%v"
   :size 16
   :value-face 'textui-field-face
-  :textui-measure #'textui-widgets--field-text
-  :textui-attach #'textui-widgets--attach-field)
+  :textui-measure #'textui-widgets-measure-field
+  :textui-attach #'textui-widgets-attach-field)
 
 (provide 'textui-widgets)
 ;;; textui-widgets.el ends here

@@ -82,10 +82,12 @@ _Avoid_: Image widget, image component, height layout
 
 **Deferred widget placeholder**:
 A single-line string carrying a TextUI text property with the original native
-widget element. TextUI measures a temporary widget, lays out its plain placeholder
-text, inserts the completed layout into the real buffer, and replaces placeholder
-ranges from last to first with real widgets. The placeholder is positioning data,
-not component identity or persistent state.
+widget element. TextUI obtains its text from the widget type's optional
+`:textui-measure` function or from temporary widget creation, lays out that
+plain placeholder, and inserts the completed layout into the real buffer. It
+then either calls the type's optional `:textui-attach` function on the existing
+text or replaces the range through ordinary widget creation. The placeholder is
+positioning data, not component identity or persistent state.
 _Avoid_: Widget adapter, layout marker, reconciliation key
 
 **Layout options**:
@@ -104,13 +106,14 @@ _Avoid_: Equal share
 The temporary presentation of an already computed and expanded interface frame,
 used only to discover natural widths before layout. A refresh calls the render
 function and element expanders once, then uses the same resulting frame for both
-measurement and real presentation. The two presentations may each call
-`widget-create`, so a widget's creation code must tolerate running twice. TextUI
-may skip natural-width measurement for a layout element whose layout options
-supply numeric `:width`, but native widgets are always measured because they
-cannot be forced narrower than their content. TextUI does not track or
-individually delete measurement widgets; Emacs discards the temporary buffer,
-and any measurement error is re-signaled directly.
+measurement and real presentation. Without a declared native-widget fast path,
+the two presentations may each create the widget, so its creation code must
+tolerate running twice. TextUI may skip natural-width measurement for a layout
+element whose layout options supply numeric `:width`, but native widgets are
+always measured because they cannot be forced narrower than their content.
+TextUI does not track or individually delete measurement widgets; Emacs
+discards the temporary buffer, and any measurement error is re-signaled
+directly.
 _Avoid_: Widget adapter, guessed width
 
 **Grow weight**:
@@ -169,6 +172,20 @@ can call `widget-delete` on them before the next `erase-buffer`; otherwise stale
 editable-field overlays can expand across the replacement frame. This tracking
 does not give widgets persistent identity.
 _Avoid_: TextUI component, TextUI leaf element
+
+**Native widget fast path**:
+Two optional, inherited widget type properties. `:textui-measure` is a function
+of one converted widget that returns the exact single-line presentation without
+creating it. `:textui-attach` is a function of that widget and the bounds of the
+already inserted presentation; it attaches ordinary widget.el behavior without
+changing the width and leaves exact `:from` and `:to` markers. Package widgets
+declare these properties in their existing `define-widget` forms. Each property
+accelerates its corresponding phase; a missing capability keeps that phase's
+ordinary creation path. There is no type registry or second control hierarchy.
+`textui-widgets.el` supplies reusable functions
+for common button, checkbox, and editable-field presentations plus optional
+ready-made types using the same fields.
+_Avoid_: Widget adapter registry, replacement widget system
 
 **Render function**:
 A caller-supplied function of one available-width argument that returns a

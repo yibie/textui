@@ -356,6 +356,52 @@ widget, but it cannot shorten its label, editable area, or image glyph. See
 [`docs/widget-compatibility.md`](docs/widget-compatibility.md) for the tested
 sample of built-in and package-owned widgets.
 
+### Opt an existing widget into the fast path
+
+TextUI normally creates a native widget once for measurement and again in the
+real buffer. A package-owned widget can avoid both creation passes by adding two
+ordinary widget type properties:
+
+```elisp
+(require 'textui-widgets)
+
+(define-widget 'my-package-save-button 'push-button
+  "My package's existing Save button."
+  ;; Its existing creation code presents the same "[ LABEL ]" text.
+  :textui-measure #'textui-widgets-measure-button
+  :textui-attach #'textui-widgets-attach-button)
+```
+
+The package continues to use its own type:
+
+```elisp
+(:type my-package-save-button
+ :value "Save"
+ :action my-package-save)
+```
+
+`:textui-measure` receives the converted widget and must return the exact
+single-line string that its ordinary creation code would present.
+`:textui-attach` receives that widget plus the bounds of the already inserted
+string and attaches normal widget.el behavior without changing its width.
+These properties are inherited through `define-widget`; no TextUI registration
+or replacement type is required.
+
+`textui-widgets.el` exports matching pairs for three common presentation
+contracts:
+
+| Existing widget presentation | Measurement function                    | Attachment function              |
+|------------------------------|-----------------------------------------|----------------------------------|
+| Padded text button           | `textui-widgets-measure-button`         | `textui-widgets-attach-button`   |
+| Text-only checkbox           | `textui-widgets-measure-checkbox`       | `textui-widgets-attach-checkbox` |
+| Fixed-width editable field   | `textui-widgets-measure-field`          | `textui-widgets-attach-field`    |
+
+The optional `textui-button`, `textui-checkbox`, and `textui-field` types are
+ready-made presets using those same fields. Use a preset when its presentation
+fits; add the fields to an existing package widget when that type already owns
+the package's behavior and identity. A display convention not covered above
+may supply its own two functions.
+
 A widget's `:action` causes one automatic reconciled refresh after a normal
 return, unless it already requested or performed a refresh. `widget.el` owns
 `:notify`; TextUI does not refresh implicitly after it. Call `textui-update` or

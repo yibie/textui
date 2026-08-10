@@ -1,5 +1,9 @@
 # Measure elements by temporary rendering
 
+The universal fallback remains, but package widget types may now declare the
+optional fast path recorded in
+[ADR 0034](0034-widget-types-declare-optional-fast-paths.md).
+
 TextUI has no widget-adapter registry. Each refresh calls its render function
 and element expanders once, then uses that same computed frame first in a
 temporary buffer to measure widest lines and again in the real buffer after
