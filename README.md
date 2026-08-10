@@ -37,6 +37,26 @@ The responsibility split is deliberate:
   reconciliation, focus preservation, and responsive layout.
 - Your package owns domain data, commands, parsing, and the render function.
 
+## Design constraints
+
+TextUI borrows two ideas from htmx as engineering constraints:
+[architectural sympathy](https://htmx.org/essays/architectural-sympathy/) and
+[locality of behaviour](https://htmx.org/essays/locality-of-behaviour/).
+This is an analogy, not a Web programming model for Emacs.
+
+- Use native Emacs and `widget.el` facilities before adding a TextUI concept.
+- Keep a behaviour's declaration beside the element, state route, or effect it
+  governs; keep its implementation in ordinary Lisp functions.
+- Replace the complete frame or an explicitly named complete-line region. Do
+  not maintain a parallel component tree or infer a reactive dependency graph.
+- Extract a framework primitive only after a capability prototype shows a
+  repeated problem that existing composition cannot solve.
+
+The analogy stops at the platform boundary: TextUI has no server, hypermedia,
+network request lifecycle, or htmx-compatible attributes. The complete
+decision and the admission tests for future abstractions are recorded in
+[ADR 0033](docs/adr/0033-textui-extends-widget-el-instead-of-replacing-it.md).
+
 ## See TextUI in action
 
 ![TextUI btop demo showing responsive panels and live system data](docs/media/textui-btop.gif)
