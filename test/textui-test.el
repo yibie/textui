@@ -296,7 +296,7 @@
     (should (equal (textui--render-frame frame 16)
                    "alpha beta gamma"))
     (should (equal (textui--render-frame frame 10)
-                   "alpha\nbeta gamma"))))
+                   "alpha beta\ngamma"))))
 
 (ert-deftest textui-text-pixel-width-supports-emacs-30-arity ()
   (let ((emacs-version "30.1")
@@ -331,6 +331,56 @@
         (text-property-not-all 0 (length line) 'display nil line))
       lines))))
 
+(ert-deftest textui-text-leaf-uses-global-knuth-plass-breaks ()
+  (require 'textui-kp-core)
+  (let* ((value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation.")
+         (lines (textui-kp-core-justify-lines value value 27)))
+    (should
+     (equal (mapcar (lambda (line)
+                      (replace-regexp-in-string
+                       "\u200B" "" (substring-no-properties line)))
+                    lines)
+            '("TextUI gives Knuth–Plass the"
+              "card's inner pixel width,"
+              "then stretches display-only"
+              "spacing without changing the"
+              "Flex allocation.")))
+    (dolist (line (butlast lines))
+      (should (= (textui-kp-core--pixel-width line) 27)))
+    (should-not
+     (seq-some (lambda (line)
+                 (text-property-not-all
+                  0 (length line) 'textui--synthetic-spacing nil line))
+               lines))))
+
+(ert-deftest textui-text-leaf-falls-back-before-kp-overflows ()
+  (require 'textui-kp-core)
+  (let* ((value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation.")
+         (lines (textui-kp-core-justify-lines value value 13)))
+    (dolist (line lines)
+      (should (<= (textui-kp-core--pixel-width line) 13)))
+    (should (member "stretches" (mapcar #'substring-no-properties lines)))
+    (should (member "display-only"
+                    (mapcar #'substring-no-properties lines)))))
+
+(ert-deftest textui-text-leaf-does-not-measure-identifier-breaks-as-spaces ()
+  (require 'textui-kp-core)
+  (should
+   (equal (mapcar #'substring-no-properties
+                  (textui-kp-core-justify-lines
+                   "TextUI alpha beta" "TextUI alpha beta" 17))
+          '("TextUI alpha beta"))))
+
+(ert-deftest textui-pixel-justified-text-keeps-its-layout-box-width ()
+  (require 'textui-kp-core)
+  (let* ((value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation.")
+         (frame
+          `((:type :flex :direction :column :padding 1 :border t
+             :children ((:type :text :value ,value)))))
+         (lines (split-string (textui--render-frame frame 59) "\n")))
+    (dolist (line lines)
+      (should (= (textui-kp-core--pixel-width line) 59)))))
+
 (ert-deftest textui-text-leaf-passes-inner-content-width-to-justification ()
   (require 'textui-kp-core)
   (let ((expected (textui--text-pixel-width 17))
@@ -346,33 +396,6 @@
        21))
     (should (= received expected))))
 
-(ert-deftest textui-text-breaks-match-vendored-ekp-core ()
-  (dolist
-      (case
-       '(("alpha beta gamma delta epsilon"
-          (6 ((0 . 5) (6 . 10) (11 . 16) (17 . 30)))
-          (10 ((0 . 5) (6 . 16) (17 . 22) (23 . 30)))
-          (16 ((0 . 16) (17 . 30)))
-          (24 ((0 . 16) (17 . 30))))
-         ("中文标点，不能出现在行首。（括号也一样。）"
-          (6 ((0 . 2) (2 . 5) (5 . 7) (7 . 10) (10 . 13)
-              (13 . 15) (15 . 18) (18 . 21)))
-          (10 ((0 . 5) (5 . 9) (9 . 13) (13 . 18) (18 . 21)))
-          (16 ((0 . 8) (8 . 16) (16 . 21)))
-          (24 ((0 . 11) (11 . 21))))
-         ("TextUI 让 mixed CJK and Latin text 动态断行。"
-          (6 ((0 . 4) (4 . 8) (9 . 14) (15 . 18) (19 . 22)
-              (23 . 28) (29 . 33) (34 . 37) (37 . 39)))
-          (10 ((0 . 8) (9 . 18) (19 . 28) (29 . 36) (36 . 39)))
-          (16 ((0 . 14) (15 . 28) (29 . 39)))
-          (24 ((0 . 22) (23 . 39))))))
-    (let ((string (car case)))
-      (dolist (expected (cdr case))
-        (should
-         (equal (textui--text-break-ranges
-                 string (textui--text-pixel-width (car expected)))
-                (cadr expected)))))))
-
 (ert-deftest textui-text-leaf-composes-inside-grid ()
   (let* ((frame
           '((:type :grid :columns 2 :min-column-width 10 :gap 1
@@ -382,8 +405,8 @@
          (lines (textui-test--trimmed-lines
                  (textui--render-frame frame 21))))
     (should (= (length lines) 2))
-    (should (equal (car lines) "alpha      R"))
-    (should (equal (cadr lines) "beta gamma"))))
+    (should (equal (car lines) "alpha beta R"))
+    (should (equal (cadr lines) "gamma"))))
 
 (ert-deftest textui-text-leaf-validates-its-public-shape ()
   (should-error (textui--render-frame '((:type :text :value 42)) 20))
@@ -1032,6 +1055,28 @@
                          '("one-a" "one-b" "two-a" "two-b" "footer"))))
       (kill-buffer buffer))))
 
+(ert-deftest textui-equal-length-region-refresh-reuses-rendered-cache ()
+  (let ((buffer (generate-new-buffer " *textui-region-cache-test*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 20
+                      textui--render-function
+                      (lambda (_width)
+                        '((:type :flex :direction :column :gap 0
+                           :layout (:refresh-id value)
+                           :children
+                           ((:type item :format "%v" :value "old"))))))
+          (textui-refresh buffer)
+          (let ((cached textui--rendered-frame))
+            (textui-refresh-region
+             buffer 'value
+             (lambda (_width)
+               '((:type item :format "%v" :value "new"))))
+            (should (eq cached textui--rendered-frame))
+            (should (string-match-p "new" (buffer-string)))))
+      (kill-buffer buffer))))
+
 (ert-deftest textui-request-refresh-region-coalesces-latest-producer ()
   (let ((buffer (generate-new-buffer " *textui-request-region-test*"))
         (calls 0)
@@ -1324,6 +1369,33 @@
       (should (eq (get-text-property 3 'button) 'checkbox))
       (should-not (get-text-property 4 'display))
       (should (eq (get-text-property 4 'button) 'custom)))))
+
+(ert-deftest textui-widget-field-box-does-not-widen-its-layout-line ()
+  (let ((buffer (generate-new-buffer " *textui-field-box-test*"))
+        (face-attribute-function (symbol-function 'face-attribute)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local textui--last-width 20
+                      textui--render-function
+                      (lambda (_width)
+                        '((:type editable-field :format "%v"
+                           :size 8 :value "Ada"))))
+          (cl-letf (((symbol-function 'face-attribute)
+                     (lambda (face attribute &optional frame inherit)
+                       (if (and (eq face 'widget-field)
+                                (eq attribute :box))
+                           '(:line-width (2 . -1))
+                         (funcall face-attribute-function
+                                  face attribute frame inherit)))))
+            (textui-refresh buffer))
+          (let* ((field (car widget-field-list))
+                 (overlay (widget-get field :field-overlay)))
+            (should
+             (equal (overlay-get overlay 'face)
+                    '(:inherit widget-field
+                      :box (:line-width (-2 . -1)))))))
+      (kill-buffer buffer))))
 
 (ert-deftest textui-measurement-error-leaves-old-buffer-untouched ()
   (let ((buffer (generate-new-buffer " *textui-measure-error-test*")))

@@ -81,8 +81,6 @@
 (defvar textui--current-effect-token nil
   "Dynamically bound token of the lifecycle effect being started.")
 
-(declare-function textui-kp-core-break-lines
-                  "textui-kp-core" (string line-pixel))
 (declare-function textui-kp-core-justify-lines
                   "textui-kp-core" (source attributed line-pixel))
 
@@ -339,27 +337,40 @@ Re-registering TYPE replaces the previous function.  Return TYPE."
     result))
 
 (defun textui--measure-native (element)
-  "Create native widget ELEMENT temporarily and return its placeholder text."
-  (with-temp-buffer
-    (let ((start (point))
-          (location-id
-           (when (integerp textui--next-location-id)
-             (prog1 textui--next-location-id
-               (setq textui--next-location-id
-                     (1+ textui--next-location-id))))))
-      (apply #'widget-create (plist-get element :type)
-             (textui--widget-args element))
-      (let ((text (buffer-substring-no-properties start (point))))
-        (when (string-match-p "\n" text)
-          (error "Native widget must render exactly one line: %S" element))
-        (when (= (length text) 0)
-          (error "Native widget must render at least one character: %S" element))
-        (add-text-properties
-         0 (length text)
-         (list 'textui--placeholder element
-               'textui--location-id location-id)
-         text)
-        text))))
+  "Measure native widget ELEMENT and return its placeholder text.
+Use its optional `:textui-measure' function without creating it."
+  (let* ((widget (apply #'widget-convert (plist-get element :type)
+                        (textui--widget-args element)))
+         (measure (widget-get widget :textui-measure))
+         (location-id
+          (when (integerp textui--next-location-id)
+            (prog1 textui--next-location-id
+              (setq textui--next-location-id
+                    (1+ textui--next-location-id)))))
+         (text
+          (if measure
+              (progn
+                (unless (functionp measure)
+                  (error "Widget :textui-measure is not a function: %S"
+                         measure))
+                (funcall measure widget))
+            (with-temp-buffer
+              (let ((start (point)))
+                (widget-apply widget :create)
+                (buffer-substring-no-properties start (point)))))))
+    (unless (stringp text)
+      (error "Widget :textui-measure must return a string: %S" text))
+    (setq text (copy-sequence text))
+    (when (string-match-p "\n" text)
+      (error "Native widget must render exactly one line: %S" element))
+    (when (= (length text) 0)
+      (error "Native widget must render at least one character: %S" element))
+    (add-text-properties
+     0 (length text)
+     (list 'textui--placeholder element
+           'textui--location-id location-id)
+     text)
+    text))
 
 (defun textui--sum (numbers)
   "Return the sum of NUMBERS."
@@ -535,22 +546,26 @@ Optional LIMITS caps each returned share."
                           (min overflow capacity) capacities capacities)))
         (cl-mapcar #'- starts reductions))))))
 
+(defun textui--rendered-string-width (string)
+  "Return STRING's displayed width in TextUI cells."
+  (if (and (> (length string) 0)
+           (text-property-not-all
+            0 (length string) 'textui--pixel-justified nil string))
+      (ceiling (/ (float (string-pixel-width string))
+                  (max 1 (string-pixel-width " "))))
+    (string-width string)))
+
 (defun textui--pad-right (string width)
   "Pad STRING with spaces to at least display WIDTH."
-  (let ((missing (- width (string-width string))))
+  (let ((missing (- width (textui--rendered-string-width string))))
     (if (> missing 0)
-        (let ((padding (make-string missing ?\s)))
-          (when (and (> (length string) 0)
-                     (get-text-property 0 'textui--pixel-justified string))
-            (put-text-property 0 missing 'display
-                               '(space :width (0)) padding))
-          (concat string padding))
+        (concat string (make-string missing ?\s))
       string)))
 
 (defun textui--block-width (lines)
   "Return the widest display width in LINES."
   (if lines
-      (apply #'max (mapcar #'string-width lines))
+      (apply #'max (mapcar #'textui--rendered-string-width lines))
     0))
 
 ;;;; Width-aware text
@@ -562,11 +577,6 @@ Optional LIMITS caps each returned share."
   "Return the pixel measure corresponding to WIDTH text cells."
   (max 1
        (string-pixel-width (make-string (max 1 width) ?\s))))
-
-(defun textui--text-break-ranges (string pixel-width)
-  "Return source ranges selected for STRING at PIXEL-WIDTH."
-  (require 'textui-kp-core)
-  (textui-kp-core-break-lines string pixel-width))
 
 (defun textui--text-hard-line-ranges (string)
   "Return source ranges in STRING separated by hard newlines."
@@ -727,11 +737,11 @@ Optional LIMITS caps each returned share."
       (list "")
     (let (lines)
       (dolist (row (textui--partition-row children width gap))
-        (setq lines
-              (append lines
-                      (textui--render-row-line-block
-                       row (textui--allocate-row row width gap) gap))))
-      lines)))
+        (dolist (line
+                 (textui--render-row-line-block
+                  row (textui--allocate-row row width gap) gap))
+          (push line lines)))
+      (nreverse lines))))
 
 (defun textui--render-column-content (children width gap)
   "Render column CHILDREN inside WIDTH with GAP blank lines."
@@ -742,16 +752,16 @@ Optional LIMITS caps each returned share."
       (dolist (child children)
         (unless first
           (dotimes (_ gap)
-            (setq lines (append lines (list "")))))
+            (push "" lines)))
         (setq first nil)
-        (setq lines
-              (append lines
-                      (textui--render-spec
-                       child
-                       (if (eq (plist-get child :kind) :native)
-                           (max width (plist-get child :start))
-                         width)))))
-      lines)))
+        (dolist (line
+                 (textui--render-spec
+                  child
+                  (if (eq (plist-get child :kind) :native)
+                      (max width (plist-get child :start))
+                    width)))
+          (push line lines)))
+      (nreverse lines))))
 
 (defun textui--grid-column-count (element width)
   "Return responsive column count for grid ELEMENT inside WIDTH."
@@ -800,13 +810,13 @@ Optional LIMITS caps each returned share."
           (dolist (blocks (nreverse block-rows))
             (unless first
               (dotimes (_ gap)
-                (setq lines (append lines (list "")))))
-            (setq first nil
-                  lines
-                  (append lines
-                          (textui--compose-row-blocks
-                           blocks actual-widths gap))))
-          lines)))))
+                (push "" lines)))
+            (setq first nil)
+            (dolist (line
+                     (textui--compose-row-blocks
+                      blocks actual-widths gap))
+              (push line lines)))
+          (nreverse lines))))))
 
 (defun textui--tag-layout-cells (lines location-id)
   "Tag layout-owned cells in LINES relative to LOCATION-ID."
@@ -1034,6 +1044,26 @@ Optional LIMITS caps each returned share."
               (remove-text-properties position end '(display nil)))))
         (setq position end)))))
 
+(defun textui--inset-widget-field-box (widget)
+  "Keep WIDGET's field face box inside its allocated character width."
+  (let* ((overlay (widget-get widget :field-overlay))
+         (face (and (overlayp overlay) (overlay-get overlay 'face)))
+         (box (and (facep face) (face-attribute face :box nil t)))
+         (line-width (and (listp box) (plist-get box :line-width)))
+         inset-width)
+    (cond
+     ((and (integerp line-width) (> line-width 0))
+      (setq inset-width (- line-width)))
+     ((and (consp line-width)
+           (integerp (car line-width))
+           (> (car line-width) 0))
+      (setq inset-width (cons (- (car line-width)) (cdr line-width)))))
+    (when inset-width
+      (overlay-put
+       overlay 'face
+       (list :inherit face :box
+             (plist-put (copy-tree box) :line-width inset-width))))))
+
 (defun textui--materialize-placeholders (buffer &optional from to append)
   "Replace placeholders for BUFFER between FROM and TO.
 Keep existing widget and focus records when APPEND is non-nil."
@@ -1048,11 +1078,10 @@ Keep existing widget and focus records when APPEND is non-nil."
            (expected-width
             (string-width (buffer-substring-no-properties from to))))
       (remove-text-properties from to '(textui--placeholder nil))
-      (delete-region from to)
-      (goto-char from)
       (let* ((widget (apply #'widget-convert (plist-get element :type)
                             (textui--widget-args element)))
-             (original-action (widget-get widget :action)))
+             (original-action (widget-get widget :action))
+             (attach (widget-get widget :textui-attach)))
         (when original-action
           (unless (functionp original-action)
             (error "Widget :action is not a function: %S" original-action))
@@ -1081,21 +1110,44 @@ Keep existing widget and focus records when APPEND is non-nil."
                                      textui--position-before-command))))
                     (textui--reconcile target-buffer)))
                  result)))))
-        (widget-apply widget :create)
-        (put-text-property from (point) 'textui--location-id location-id)
-        (textui--compensate-image-runs
-         (widget-get widget :from) (widget-get widget :to))
-        (push widget textui--widgets)
-        (let ((actual (buffer-substring-no-properties from (point))))
-          (when (or (string-match-p "\n" actual)
-                    (/= expected-width (string-width actual)))
-            (error "Measured and real widget output differs: %S" element)))
-        (let ((focus-id (textui--focus-id element)))
-          (when focus-id
-            (when (assoc focus-id textui--focus-anchors)
-              (error "Duplicate focus ID: %S" focus-id))
-            (push (list focus-id from (point)) textui--focus-anchors))))))
-  (widget-setup))
+        (if attach
+            (progn
+              (unless (functionp attach)
+                (error "Widget :textui-attach is not a function: %S" attach))
+              (funcall attach widget from to)
+              (let ((widget-from (widget-get widget :from))
+                    (widget-to (widget-get widget :to)))
+                (unless (and (markerp widget-from)
+                             (markerp widget-to)
+                             (eq (marker-buffer widget-from) buffer)
+                             (eq (marker-buffer widget-to) buffer)
+                             (= widget-from from)
+                             (= widget-to to))
+                  (error "Widget :textui-attach returned invalid bounds: %S"
+                         element))
+                (goto-char widget-to)))
+          (delete-region from to)
+          (goto-char from)
+          (widget-apply widget :create))
+        (let ((actual-end (point)))
+          (put-text-property from actual-end
+                             'textui--location-id location-id)
+          (textui--compensate-image-runs
+           (widget-get widget :from) (widget-get widget :to))
+          (push widget textui--widgets)
+          (let ((actual (buffer-substring-no-properties from actual-end)))
+            (when (or (string-match-p "\n" actual)
+                      (/= expected-width (string-width actual)))
+              (error "Measured and real widget output differs: %S" element)))
+          (let ((focus-id (textui--focus-id element)))
+            (when focus-id
+              (when (assoc focus-id textui--focus-anchors)
+                (error "Duplicate focus ID: %S" focus-id))
+              (push (list focus-id from actual-end)
+                    textui--focus-anchors)))))))
+  (widget-setup)
+  (dolist (widget textui--widgets)
+    (textui--inset-widget-field-box widget)))
 
 (defun textui--capture-text-focus ()
   "Return point's semantic source position inside a width-aware text leaf."
@@ -1597,7 +1649,8 @@ Registering the same function object more than once has no effect."
                        (nth 1 textui--focus-override)
                      (textui--capture-position)))
          (views (textui--capture-window-views buffer focus position))
-         (inhibit-read-only t))
+         (inhibit-read-only t)
+         (inhibit-modification-hooks t))
     (mapc #'widget-delete textui--widgets)
     (setq textui--widgets nil)
     (erase-buffer)
@@ -1662,10 +1715,11 @@ Registering the same function object more than once has no effect."
   (when textui--rendered-frame
     (let ((start (- from (point-min)))
           (end (- to (point-min))))
-      (setq textui--rendered-frame
-            (concat (substring textui--rendered-frame 0 start)
-                    replacement
-                    (substring textui--rendered-frame end))))))
+      (unless (= (- end start) (length replacement))
+        (setq textui--rendered-frame
+              (concat (substring textui--rendered-frame 0 start)
+                      replacement
+                      (substring textui--rendered-frame end)))))))
 
 (defun textui--refresh-region-templates-equal-p (left right)
   "Return non-nil when LEFT and RIGHT differ only by generated location IDs."
@@ -1698,7 +1752,8 @@ Registering the same function object more than once has no effect."
          (delta (- (length replacement-text) (- to from)))
          (content (string-remove-suffix "\n" replacement-text))
          (max-row (max 0 (1- (length (split-string content "\n")))))
-         (inhibit-read-only t))
+         (inhibit-read-only t)
+         (inhibit-modification-hooks t))
     (textui--replace-rendered-cache from to replacement-text)
     (textui--delete-widgets-in-region from to)
     (delete-region from-marker to-marker)
