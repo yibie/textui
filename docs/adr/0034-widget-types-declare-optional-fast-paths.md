@@ -19,7 +19,9 @@ It needs no TextUI type registration and does not require inheriting from a
 TextUI-defined control. `textui-widgets.el` exports reusable measurement and
 attachment functions for padded text buttons, text-only checkboxes, and
 fixed-width editable fields. Its `textui-button`, `textui-checkbox`, and
-`textui-field` types are convenience presets built from the same properties.
+`textui-field` types are small examples built from the same properties, not a
+recommended control layer. Packages should continue defining their controls
+with widget.el and add the two fields to package-owned types when useful.
 
 TextUI does not provide `:textui-enhanced t`. Skipping widget creation requires
 an exact presentation string and type-specific attachment behavior; those facts

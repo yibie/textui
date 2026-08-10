@@ -68,34 +68,13 @@ independently refreshed regions. More recordings cover
 [the 10,000-row K9s viewport](docs/media/textui-k9s-10k-adaptive-viewport.gif),
 and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
-## What's new in 0.4.0
+## Releases
 
-TextUI 0.4.0 lets existing package-owned `widget.el` types opt into the same
-fast rendering path used by `textui-widgets`, without registration or a second
-widget hierarchy.
-
-Highlights:
-
-- Makes the inherited `:textui-measure` and `:textui-attach` widget fields the
-  public fast-path protocol.
-- Exports measurement and attachment helpers for buttons, text checkboxes, and
-  editable fields.
-- Preserves each custom type's action, notification, validation, and keymap;
-  only measurement and buffer attachment are accelerated.
-- Keeps `textui-button`, `textui-checkbox`, and `textui-field` as ready-made
-  convenience types rather than mandatory replacements.
-- Documents the extension contract and its invariants in
-  [ADR 0034](docs/adr/0034-widget-types-declare-optional-fast-paths.md).
-
-On the release machine, a full refresh of 3,000 attached controls measured
-238.58 ms versus 596.55 ms for the generic native path. These figures describe
-that fixture and machine, not a cross-system guarantee.
-
-Verification:
-
-- 105 ERT tests pass.
-- Byte compilation passes with warnings treated as errors.
-- Requires Emacs 29.1 or later.
+The current release is 0.4.0. See the [changelog](CHANGELOG.md) for the complete
+version history. The measured refresh improvements and their fixture scope are
+summarized in [Performance history](CHANGELOG.md#performance-history); runnable
+diagnostics remain under
+[`test/performance/`](test/performance/README.md).
 
 ## Load TextUI from a checkout
 
@@ -393,11 +372,12 @@ contracts:
 | Text-only checkbox           | `textui-widgets-measure-checkbox`       | `textui-widgets-attach-checkbox` |
 | Fixed-width editable field   | `textui-widgets-measure-field`          | `textui-widgets-attach-field`    |
 
-The optional `textui-button`, `textui-checkbox`, and `textui-field` types are
-ready-made presets using those same fields. Use a preset when its presentation
-fits; add the fields to an existing package widget when that type already owns
-the package's behavior and identity. A display convention not covered above
-may supply its own two functions.
+The library also contains `textui-button`, `textui-checkbox`, and
+`textui-field` as small examples of the protocol. They are not a recommended
+widget layer. Package authors should continue to define controls with
+`widget.el`, then add the two fields to those package-owned types when the fast
+path is useful. A display convention not covered above may supply its own two
+functions.
 
 A widget's `:action` causes one automatic reconciled refresh after a normal
 return, unless it already requested or performed a refresh. `widget.el` owns

@@ -12,7 +12,8 @@
 ;; `:textui-measure' and `:textui-attach' widget type properties.  Existing
 ;; package widgets may opt into the fast path by adding the matching functions
 ;; to their ordinary `define-widget' definitions.  The three `textui-*' widget
-;; types below are convenience presets, not a separate control system.
+;; types below are small protocol examples, not a recommended control layer;
+;; packages should continue to define their controls with `widget.el'.
 
 ;;; Code:
 
