@@ -340,8 +340,8 @@
                       (replace-regexp-in-string
                        "\u200B" "" (substring-no-properties line)))
                     lines)
-            '("TextUI gives Knuth–Plass"
-              "the card's inner pixel width,"
+            '("TextUI gives Knuth–Plass the"
+              "card's inner pixel width,"
               "then stretches display-only"
               "spacing without changing the"
               "Flex allocation.")))
@@ -352,6 +352,24 @@
                  (text-property-not-all
                   0 (length line) 'textui--synthetic-spacing nil line))
                lines))))
+
+(ert-deftest textui-text-leaf-falls-back-before-kp-overflows ()
+  (require 'textui-kp-core)
+  (let* ((value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation.")
+         (lines (textui-kp-core-justify-lines value value 13)))
+    (dolist (line lines)
+      (should (<= (textui-kp-core--pixel-width line) 13)))
+    (should (member "stretches" (mapcar #'substring-no-properties lines)))
+    (should (member "display-only"
+                    (mapcar #'substring-no-properties lines)))))
+
+(ert-deftest textui-text-leaf-does-not-measure-identifier-breaks-as-spaces ()
+  (require 'textui-kp-core)
+  (should
+   (equal (mapcar #'substring-no-properties
+                  (textui-kp-core-justify-lines
+                   "TextUI alpha beta" "TextUI alpha beta" 17))
+          '("TextUI alpha beta"))))
 
 (ert-deftest textui-pixel-justified-text-keeps-its-layout-box-width ()
   (require 'textui-kp-core)

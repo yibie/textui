@@ -51,7 +51,7 @@
         "Pixel-justified text"
         '((:type :text
            :value "TextUI gives Knuth–Plass the card's inner pixel width, then stretches display-only spacing without changing the Flex allocation."))
-        26)))))
+        49)))))
 
 (let ((buffer (textui-open "*TextUI Responsive Demo*"
                            #'textui-responsive-demo--frame)))

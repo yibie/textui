@@ -283,9 +283,11 @@ boxing, kinsoku rules, global line breaking, and glue allocation, so packages
 using TextUI do not need a separate `emacs-kp` installation.
 
 Give justified prose a reasonable minimum width. At very narrow widths,
-the emergency pass may need visibly wide word spacing to fill a line. A package
-that supports such a narrow window should return a more compact frame or place
-the prose on a row of its own.
+the emergency pass may need visibly wide word spacing to fill a line. If that
+pass would exceed the content width, TextUI instead wraps the whole paragraph
+with natural ragged-right spacing. Only an indivisible token wider than the
+content can still overflow. A package that supports a very narrow window should
+return a more compact frame or place the prose on a row of its own.
 
 ### Images
 

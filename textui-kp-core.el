@@ -507,6 +507,11 @@
                      boxes types position)
                do (aset breaks-ok position nil)
                and do (aset glue-types position 'nws))
+      (cl-loop for position from 1 below n
+               when (and (eq (aref glue-types position) 'lws)
+                         (= (cdr (aref offsets (1- position)))
+                            (car (aref offsets position))))
+               do (aset glue-types position 'nws))
       (dotimes (index n)
         (let* ((type (aref glue-types index))
                (glue (textui-kp-core--glue-ideal-pixel
@@ -567,6 +572,40 @@
             (setq start end
                   line-index (1+ line-index))))
         (or (nreverse ranges) (list (cons 0 (length string))))))))
+
+(defun textui-kp-core--ragged-ranges (string line-pixel)
+  "Return width-safe, naturally spaced source ranges for STRING."
+  (if (string-empty-p string)
+      (list (cons 0 0))
+    (let* ((boxes (textui-kp-core--split-tokens
+                   string (textui-kp-core--split-boxes string)))
+           (n (length boxes))
+           (types (vconcat (mapcar #'textui-kp-core--box-type boxes)))
+           (offsets (textui-kp-core--box-offsets string boxes))
+           (start 0)
+           ranges)
+      (while (< start n)
+        (let ((end (1+ start))
+              best forced done)
+          (while (and (<= end n) (not done))
+            (when (or (= end n)
+                      (not (textui-kp-core--break-forbidden-p
+                            boxes types end)))
+              (unless forced (setq forced end))
+              (let ((range (cons (car (aref offsets start))
+                                 (cdr (aref offsets (1- end))))))
+                (if (<= (textui-kp-core--pixel-width
+                         (substring string (car range) (cdr range)))
+                        line-pixel)
+                    (setq best end)
+                  (setq done t))))
+            (setq end (1+ end)))
+          (setq best (or best forced))
+          (push (cons (car (aref offsets start))
+                      (cdr (aref offsets (1- best))))
+                ranges)
+          (setq start best)))
+      (nreverse ranges))))
 
 (defun textui-kp-core--glue-ideal-pixel (type word-space mixed-space)
   "Return TYPE's ideal width for WORD-SPACE and MIXED-SPACE."
@@ -781,12 +820,24 @@ LAST-LINE keeps its natural ragged-right spacing."
          (last-index (1- (length ranges)))
          (index 0)
          lines)
-    (dolist (range ranges (nreverse lines))
+    (dolist (range ranges)
       (push (textui-kp-core--justify-line
              (substring attributed (car range) (cdr range))
              line-pixel (= index last-index))
             lines)
-      (setq index (1+ index)))))
+      (setq index (1+ index)))
+    (setq lines (nreverse lines))
+    (if (seq-some
+         (lambda (line)
+           (and (> (length line) 0)
+                (not (get-text-property
+                      0 'textui--pixel-justified line))
+                (> (textui-kp-core--pixel-width line) line-pixel)))
+         lines)
+        (mapcar (lambda (range)
+                  (substring attributed (car range) (cdr range)))
+                (textui-kp-core--ragged-ranges source line-pixel))
+      lines)))
 
 (provide 'textui-kp-core)
 
