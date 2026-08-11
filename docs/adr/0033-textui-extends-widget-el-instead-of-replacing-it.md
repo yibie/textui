@@ -46,14 +46,13 @@ ADRs):
 - State-driven rendering maps to `state + width -> render function -> buffer`,
   with the render function as the only evaluation seam (ADRs 0003, 0004).
 - Locality of behaviour maps to `:action`/`:notify` living on the element
-  plist and to route and effect declarations living inside the render
-  function they describe (ADRs 0031, 0032). It does not license inlining
+  plist and effect declarations living inside the render function they
+  describe (ADR 0031). It does not license inlining
   implementations, and it is a reading aid, not a gate — htmx's own author
   treats it as a trade-off.
 - Partial replacement maps to `textui-refresh-region` replacing complete-line
-  blocks inside owned markers (ADR 0027) and to one state key routing to
-  several regions, which plays the structural role of out-of-band swaps
-  (ADR 0032).
+  blocks inside owned markers (ADR 0027). State updates instead evaluate the
+  complete frame and automatically patch changed named regions (ADR 0035).
 - Augmenting the platform maps to TextUI's core position: widget.el keeps
   controls, input, validation, and keymaps; TextUI adds layout, measurement,
   refresh, and lifecycle around them (ADRs 0012, 0019, 0031).
@@ -86,8 +85,8 @@ pretend otherwise:
 Terms like "hypermedia-driven" and "server-driven" have no referent in this
 codebase — there is no hypermedia, no media type, no server — and must not
 appear in TextUI documentation as if they named a mechanism. The observable
-content of this ADR is: replace instead of morph, native controls, explicit
-routing, one evaluation seam.
+content of this ADR is: replace instead of morph, native controls, bounded
+region refresh, one evaluation seam.
 
 ## Decision: allowed
 
@@ -99,16 +98,16 @@ routing, one evaluation seam.
 - Full-frame refresh remains erase-and-insert; region refresh remains bounded
   replacement of complete-line blocks (ADR 0027). The block-level shell
   comparison in `textui--reconcile` may stay at block granularity.
-- State routing (ADR 0032) and effects (ADR 0031) continue at their current
-  boundaries: declared top-level plist keys with shallow comparison, and
-  explicit `equal`-compared dependencies reconciled only on full frames.
+- State updates use complete frame reconciliation (ADR 0035). Effects retain
+  explicit `equal`-compared dependencies reconciled only on complete frames
+  (ADR 0031).
 
 ## Decision: refused
 
 - Virtual DOM, retained component trees, morphing, per-element frame
   comparison, and `replace-buffer-contents` (ADR 0011).
-- Reactive dependency graphs: inferred dependencies, nested-key tracking,
-  derived or cascading routes (ADR 0032's closing guardrail).
+- Reactive dependency graphs: inferred dependencies, nested-key tracking, or
+  manual state-to-region routes (ADR 0035).
 - Component instances, props, or identity namespaces. Internal source-order
   location IDs and package-supplied focus IDs remain navigation anchors (ADRs
   0011, 0019), not persistent component identity.
@@ -134,9 +133,9 @@ all of these, checked in review:
    replacement must prove that block replacement cannot meet a measured
    correctness or performance requirement, and it must not require a retained
    element tree or component identity.
-3. Explicit dependencies only: any state-to-region mapping is declared via
-   `textui-route-state` over top-level plist keys with shallow comparison;
-   nothing infers dependencies from code.
+3. No state dependency graph: ordinary state updates evaluate the complete
+   frame. Explicit region producers remain for callers that already own an
+   external complete-line update; nothing infers dependencies from code.
 4. Native passthrough: no new event, binding, or model attribute. Widget
    properties reach `widget-create` unchanged after TextUI removes only its
    own structural keys.

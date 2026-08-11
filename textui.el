@@ -26,7 +26,7 @@
 ;; TextUI lays out text and ordinary widget.el controls in responsive
 ;; Emacs buffers.
 ;; Its public surface is intentionally small: `textui-open',
-;; `textui-update', `textui-set-state', `textui-route-state', `textui-effect',
+;; `textui-update', `textui-set-state', `textui-effect',
 ;; `textui-async-callback', `textui-refresh', `textui-request-refresh',
 ;; `textui-refresh-region',
 ;; `textui-request-refresh-region', `textui-register-cleanup', and
@@ -72,12 +72,6 @@
 (defvar textui--rendered-effects nil
   "Dynamically collected (ID DEPENDENCIES SETUP) effect descriptions.")
 
-(defvar textui--collect-state-routes nil
-  "Non-nil while the render function may declare state routes.")
-
-(defvar textui--rendered-state-routes nil
-  "Dynamically collected (REGION KEYS PRODUCER) state routes.")
-
 (defvar textui--current-effect-token nil
   "Dynamically bound token of the lifecycle effect being started.")
 
@@ -97,8 +91,6 @@
 (defvar-local textui--cleanup-functions nil)
 (defvar-local textui--effects nil
   "Active (ID DEPENDENCIES CLEANUP TOKEN) lifecycle effects.")
-(defvar-local textui--state-routes nil
-  "Active (REGION KEYS PRODUCER) state-to-region routes.")
 (defvar-local textui--refresh-generation 0)
 (defvar-local textui--rendered-frame nil
   "Last pre-widget rendered frame used for automatic reconciliation.")
@@ -1365,29 +1357,6 @@ FOCUS and POSITION describe point in the selected window."
   "Keymap for `textui-mode'.")
 
 ;;;###autoload
-(defun textui-route-state (region keys producer)
-  "Route changes to plist state KEYS directly to refresh REGION.
-Call this from a TextUI render function.  PRODUCER follows the
-`textui-refresh-region' contract and must read the current `textui-state'.
-Every key must affect only the declared region or regions; undeclared keys
-fall back to complete frame reconciliation."
-  (unless textui--collect-state-routes
-    (error "textui-route-state must be called by a TextUI render function"))
-  (unless (symbolp region)
-    (error "State route region must be a symbol: %S" region))
-  (unless (and (textui--proper-list-p keys)
-               keys
-               (cl-every #'symbolp keys))
-    (error "State route keys must be a non-empty symbol list: %S" keys))
-  (unless (functionp producer)
-    (error "State route producer must be a function: %S" producer))
-  (when (assq region textui--rendered-state-routes)
-    (error "Duplicate state route region: %S" region))
-  (push (list region (delete-dups (copy-sequence keys)) producer)
-        textui--rendered-state-routes)
-  nil)
-
-;;;###autoload
 (defun textui-effect (id dependencies setup)
   "Keep one buffer lifecycle effect ID synchronized with DEPENDENCIES.
 Call this from a TextUI render function.  SETUP runs after the rendered frame
@@ -1480,7 +1449,6 @@ effect has stopped or the buffer has been killed."
                           textui--cleanup-functions))
         first-error)
     (setq textui--effects nil
-          textui--state-routes nil
           textui--cleanup-functions nil)
     (dolist (cleanup cleanups)
       (condition-case error-data
@@ -1621,24 +1589,17 @@ Registering the same function object more than once has no effect."
       (move-to-column (plist-get snapshot :column))))))
 
 (defun textui--render-current-frame (buffer)
-  "Return BUFFER's current (WIDTH RENDERED REGIONS EFFECTS ROUTES) frame data."
+  "Return BUFFER's current (WIDTH RENDERED REGIONS EFFECTS) frame data."
   (let ((width (textui--available-width buffer))
         (textui--collect-refresh-regions t)
         (textui--rendered-regions nil)
         (textui--collect-effects t)
-        (textui--rendered-effects nil)
-        (textui--collect-state-routes t)
-        (textui--rendered-state-routes nil))
+        (textui--rendered-effects nil))
     (let* ((frame (funcall textui--render-function width))
            (specs (textui--prepare-frame frame))
            (rendered (textui--render-specs specs width))
-           (regions (textui--collect-refresh-region-spans rendered))
-           (routes (nreverse textui--rendered-state-routes)))
-      (dolist (route routes)
-        (unless (assq (car route) regions)
-          (error "Unknown state route region: %S" (car route))))
-      (list width rendered regions (nreverse textui--rendered-effects)
-            routes))))
+           (regions (textui--collect-refresh-region-spans rendered)))
+      (list width rendered regions (nreverse textui--rendered-effects)))))
 
 (defun textui--commit-full-frame (buffer width rendered regions)
   "Commit a complete BUFFER frame described by WIDTH, RENDERED, and REGIONS."
@@ -1812,7 +1773,6 @@ Registering the same function object more than once has no effect."
                  buffer installed new template))))
           (setq textui--rendered-frame rendered
                 textui--last-width width))
-        (setq textui--state-routes (nth 4 frame))
         (textui--commit-effects (nth 3 frame))
         buffer))))
 
@@ -1881,47 +1841,10 @@ pending requests for the same BUFFER and ID keep only the latest PRODUCER."
                                  buffer))))))
       buffer)))
 
-(defun textui--changed-plist-keys (before after)
-  "Return top-level keys whose values differ between BEFORE and AFTER."
-  (let (keys changed)
-    (dolist (plist (list before after))
-      (let ((cursor plist))
-        (while cursor
-          (cl-pushnew (car cursor) keys :test #'eq)
-          (setq cursor (cddr cursor)))))
-    (dolist (key (nreverse keys))
-      (unless (and (eq (textui--plist-member-p before key)
-                       (textui--plist-member-p after key))
-                   (equal (plist-get before key) (plist-get after key)))
-        (push key changed)))
-    (nreverse changed)))
-
-(defun textui--state-routes-for-keys (keys)
-  "Return all active state routes covering KEYS, or nil if any is uncovered."
-  (when (cl-every
-         (lambda (key)
-           (cl-some (lambda (route) (memq key (nth 1 route)))
-                    textui--state-routes))
-         keys)
-    (cl-remove-if-not
-     (lambda (route)
-       (cl-some (lambda (key) (memq key (nth 1 route))) keys))
-     textui--state-routes)))
-
-(defun textui--request-state-routes (buffer keys)
-  "Request BUFFER state routes covering changed KEYS and return non-nil.
-Return nil without requesting anything when any key is not covered."
-  (let ((routes (textui--state-routes-for-keys keys)))
-    (when routes
-      (dolist (route routes)
-        (textui-request-refresh-region buffer (nth 0 route) (nth 2 route)))
-      t)))
-
 ;;;###autoload
 (cl-defun textui-update (buffer updater &key region producer)
   "Update live TextUI BUFFER state with UPDATER and request a refresh.
 UPDATER receives `textui-state' and returns its replacement.  Without REGION,
-changed plist keys use declared state routes when all are covered, otherwise
 TextUI reconciles the complete frame.  With REGION, PRODUCER refreshes that
 existing region directly."
   (if (not (buffer-live-p buffer))
@@ -1941,16 +1864,9 @@ existing region directly."
           (progn
             (setq textui-state (funcall updater textui-state))
             (textui-request-refresh-region buffer region producer))
-        (let* ((before-is-plist (textui--plist-p textui-state))
-               (before (and before-is-plist (copy-sequence textui-state)))
-               (next (funcall updater textui-state)))
+        (let ((next (funcall updater textui-state)))
           (setq textui-state next)
-          (if (and before-is-plist (textui--plist-p next))
-              (let ((keys (textui--changed-plist-keys before next)))
-                (unless (and keys
-                             (textui--request-state-routes buffer keys))
-                  (textui-request-refresh buffer)))
-            (textui-request-refresh buffer))))
+          (textui-request-refresh buffer)))
       buffer)))
 
 ;;;###autoload
@@ -2043,7 +1959,6 @@ Return nil for a dead buffer and BUFFER after a successful refresh."
              (frame (textui--render-current-frame buffer)))
         (textui--commit-full-frame
          buffer (nth 0 frame) (nth 1 frame) (nth 2 frame))
-        (setq textui--state-routes (nth 4 frame))
         (textui--commit-effects (nth 3 frame)))
       buffer)))
 

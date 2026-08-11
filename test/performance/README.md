@@ -28,6 +28,8 @@ closure-conversion costs that are absent from an installed package.
 | `textui-widget-detach-profile.el` | Do explicitly detached markers change the result? |
 | `textui-widget-inhibit-hooks-profile.el` | What changes when framework commits suppress modification hooks? |
 | `textui-clear-field-registry-benchmark.el` | Does clearing the field registry before teardown help? |
+| `textui-btop-reconcile-benchmark.el` | Is route-free full-frame reconciliation fast enough for the btop workload? |
 
-The last four are deliberately retained negative/control experiments. A result
-showing no improvement is evidence against that hypothesis, not a broken test.
+The forward, detach, inhibit-hooks, and clear-field-registry experiments are
+deliberately retained negative controls. A result showing no improvement is
+evidence against that hypothesis, not a broken test.

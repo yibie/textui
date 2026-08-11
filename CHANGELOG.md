@@ -7,6 +7,7 @@ calendar date.
 
 | Release | Fixture | Before | After | Change |
 |---|---|---:|---:|---:|
+| Unreleased | btop, 1,000 process rows at 120 columns | 2.39 ms, state routing | 4.13 ms, complete reconciliation | 1.74 ms spent to remove manual dependencies |
 | 0.2.0 | btop, one routed detail update across 50 process rows | 11.65 ms, full refresh | 5.67 ms, state-to-region routing | 2.05x faster |
 | 0.3.0, public extension in 0.4.0 | Full refresh of 3,000 native controls | 596.55 ms, generic native path | 238.58 ms, attached path | 2.50x faster |
 
@@ -15,6 +16,21 @@ cross-machine guarantees. The retained diagnostic programs and instructions
 are under [`test/performance/`](test/performance/README.md).
 
 ## Unreleased
+
+### Changed
+
+- Remove `textui-route-state` and its manually maintained state dependency
+  graph. Ordinary state updates now always evaluate the complete frame and let
+  TextUI automatically patch changed named regions when the shell is stable.
+- Keep explicit region refresh for external updates whose caller already knows
+  the owning complete-line region.
+
+### Performance
+
+- In the byte-compiled 1,000-row btop fixture at 120 columns, complete
+  reconciliation measured a 4.13 ms median and 4.30 ms p95 versus 2.39 ms for
+  state routing. TextUI accepts the 1.74 ms median cost to remove a stale-UI
+  failure mode and the caller-maintained dependency graph.
 
 ### Documentation
 

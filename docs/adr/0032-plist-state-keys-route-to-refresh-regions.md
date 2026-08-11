@@ -1,5 +1,12 @@
 # Plist state keys route to refresh regions
 
+Status: superseded by
+[ADR 0035](0035-complete-state-reconciliation-replaces-manual-routes.md).
+
+This file records the 0.2.0 decision and is retained as history. The public
+`textui-route-state` API and its dependency graph were removed after the
+route-free experiment described in ADR 0035.
+
 TextUI render functions may declare
 `(textui-route-state REGION KEYS PRODUCER)`. `REGION` must name a complete-line
 refresh region in the same rendered frame. `KEYS` are top-level keys in
