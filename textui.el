@@ -1921,7 +1921,6 @@ Return nil without requesting anything when any key is not covered."
 (cl-defun textui-update (buffer updater &key region producer)
   "Update live TextUI BUFFER state with UPDATER and request a refresh.
 UPDATER receives `textui-state' and returns its replacement.  Without REGION,
-changed plist keys use declared state routes when all are covered, otherwise
 TextUI reconciles the complete frame.  With REGION, PRODUCER refreshes that
 existing region directly."
   (if (not (buffer-live-p buffer))
@@ -1941,16 +1940,9 @@ existing region directly."
           (progn
             (setq textui-state (funcall updater textui-state))
             (textui-request-refresh-region buffer region producer))
-        (let* ((before-is-plist (textui--plist-p textui-state))
-               (before (and before-is-plist (copy-sequence textui-state)))
-               (next (funcall updater textui-state)))
+        (let ((next (funcall updater textui-state)))
           (setq textui-state next)
-          (if (and before-is-plist (textui--plist-p next))
-              (let ((keys (textui--changed-plist-keys before next)))
-                (unless (and keys
-                             (textui--request-state-routes buffer keys))
-                  (textui-request-refresh buffer)))
-            (textui-request-refresh buffer))))
+          (textui-request-refresh buffer)))
       buffer)))
 
 ;;;###autoload

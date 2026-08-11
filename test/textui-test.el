@@ -771,7 +771,7 @@
           (should (equal (buffer-string) "2")))
       (kill-buffer buffer))))
 
-(ert-deftest textui-update-routes-plist-keys-to-named-regions ()
+(ert-deftest textui-update-reconciles-declared-route-keys-safely ()
   (let ((buffer (generate-new-buffer " *textui-state-route-test*"))
         (renders 0)
         (scheduled-count 0)
@@ -822,24 +822,60 @@
                  (setq next (plist-put next :left "L1"))
                  (plist-put next :right "R1"))))
             (should (= scheduled-count 1))
-            (should (= renders 1))
-            (should-not textui--refresh-timer)
+            (should textui--refresh-timer)
+            (should-not textui--region-refresh-timer)
             (apply (car scheduled) (cdr scheduled))
-            (should (= renders 1))
+            (should (= renders 2))
             (should (equal (textui-test--trimmed-lines (buffer-string))
                            '("L1" "R1" "S0")))
             (setq scheduled nil)
             (textui-update buffer #'identity)
             (should textui--refresh-timer)
             (apply (car scheduled) (cdr scheduled))
-            (should (= renders 2))
+            (should (= renders 3))
             (setq scheduled nil)
             (textui-set-state buffer :shell "S1")
             (should textui--refresh-timer)
             (apply (car scheduled) (cdr scheduled))
-            (should (= renders 3))
+            (should (= renders 4))
             (should (equal (textui-test--trimmed-lines (buffer-string))
                            '("L1" "R1" "S1")))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-routed-state-change-keeps-frame-shell-current ()
+  (let ((buffer (generate-new-buffer " *textui-route-shell-test*"))
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 30
+           textui-state '(:value "old")
+           textui--render-function
+           (lambda (_width)
+             (textui-route-state
+              'body '(:value)
+              (lambda (_width)
+                `((:type item :format "%v"
+                   :value ,(plist-get textui-state :value)))))
+             `((:type :flex :direction :column :gap 0
+                :children
+                ((:type :flex :direction :column :gap 0
+                  :layout (:refresh-id body)
+                  :children
+                  ((:type item :format "%v"
+                    :value ,(plist-get textui-state :value))))
+                 (:type item :format "%v"
+                  :value ,(plist-get textui-state :value)))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'route-shell-timer)))
+            (textui-set-state buffer :value "new")
+            (apply (car scheduled) (cdr scheduled)))
+          (should (equal (textui-test--trimmed-lines (buffer-string))
+                         '("new" "new"))))
       (kill-buffer buffer))))
 
 (ert-deftest textui-state-route-must-name-a-rendered-region ()
