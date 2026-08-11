@@ -17,6 +17,20 @@ are under [`test/performance/`](test/performance/README.md).
 
 ## Unreleased
 
+### Documentation
+
+- Document `textui-update` with `:region` and `:producer` as an opt-in
+  performance fast path for a measured state update confined to one region.
+  Automatic complete-frame reconciliation remains the default, and no
+  key-to-region dependency graph is restored.
+
+### Performance
+
+- Expand the retained btop benchmark to compare both supported state-update
+  modes on the same revision. With 1,000 rows at 120 columns, automatic
+  reconciliation measured 4.14 ms median and the explicit region fast path
+  measured 2.36 ms, about 1.75 times faster on that fixture.
+
 ## [0.5.0] - 2026-08-11
 
 ### Changed

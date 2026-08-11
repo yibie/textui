@@ -1,7 +1,7 @@
-;;; textui-btop-reconcile-benchmark.el --- Route/full btop cost -*- lexical-binding: t; -*-
+;;; textui-btop-reconcile-benchmark.el --- Automatic/manual btop cost -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Throwaway experiment comparing state-update reconciliation paths.
+;; Compare automatic frame reconciliation with the explicit region fast path.
 ;; Run from the repository root:
 ;; emacs -Q --batch -L . -L examples -L test/performance \
 ;;   -l test/performance/textui-btop-reconcile-benchmark.el
@@ -77,8 +77,9 @@
         (cancel-timer textui--refresh-timer)
         (textui--run-requested-refresh buffer)))))
 
-(defun textui-btop-reconcile-benchmark--run (width height rows samples)
-  "Print SAMPLE state-update times for WIDTH, HEIGHT, and ROWS."
+(defun textui-btop-reconcile-benchmark--run
+    (mode width height rows samples)
+  "Print SAMPLE MODE update times for WIDTH, HEIGHT, and ROWS."
   (let ((buffer
          (textui-btop-reconcile-benchmark--buffer width height rows))
         (index 0)
@@ -89,19 +90,31 @@
           (garbage-collect)
           (let ((started (float-time)))
             (with-current-buffer buffer
-              (textui-set-state buffer :process-index index))
+              (let ((updater
+                     (lambda (state)
+                       (plist-put (copy-sequence state)
+                                  :process-index index))))
+                (pcase mode
+                  ('automatic (textui-update buffer updater))
+                  ('manual
+                   (textui-update
+                    buffer updater
+                    :region 'btop-lower
+                    :producer #'textui-btop-prototype--lower-elements))
+                  (_ (error "Unknown reconciliation mode: %S" mode)))))
             (textui-btop-reconcile-benchmark--flush buffer height)
             (push (* 1000.0 (- (float-time) started)) times)))
       (kill-buffer buffer))
     (princ
-     (format "btop width=%d height=%d rows=%d samples=%d median=%.3fms p95=%.3fms\n"
-             width height rows samples
+     (format "btop mode=%s width=%d height=%d rows=%d samples=%d median=%.3fms p95=%.3fms\n"
+             mode width height rows samples
              (textui-btop-reconcile-benchmark--median times)
              (textui-btop-reconcile-benchmark--percentile times 0.95)))))
 
-(dolist (rows '(0 50 1000))
-  (dolist (width '(80 120 150))
-    (textui-btop-reconcile-benchmark--run width 42 rows 31)))
+(dolist (mode '(automatic manual))
+  (dolist (rows '(0 50 1000))
+    (dolist (width '(80 120 150))
+      (textui-btop-reconcile-benchmark--run mode width 42 rows 31))))
 
 (provide 'textui-btop-reconcile-benchmark)
 ;;; textui-btop-reconcile-benchmark.el ends here

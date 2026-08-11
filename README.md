@@ -390,6 +390,7 @@ choose the smallest refresh that matches the change.
 | Change source                                               | What to call                                            |
 |-------------------------------------------------------------|---------------------------------------------------------|
 | `textui-state` changed                                      | `textui-update`                                         |
+| Measured state update affects only one complete-line column | `textui-update` with `:region` and `:producer`           |
 | Native widget `:action` changed external state              | Nothing; TextUI performs one refresh automatically      |
 | External data changed across the frame                      | `textui-request-refresh`                                |
 | A complete-line column must change immediately              | `textui-refresh-region`                                 |
@@ -449,6 +450,35 @@ This costs a complete layout calculation, but it cannot leave the interface
 stale when one state value starts affecting another region, the frame shell,
 responsive layout, or an effect.
 
+#### Explicit performance fast path
+
+After measurement shows that complete reconciliation is too expensive, an
+update that affects exactly one complete-line region may name that region and
+its producer at the update site:
+
+```elisp
+(textui-update
+ buffer
+ (lambda (state)
+   (plist-put (copy-sequence state) :selected next-row))
+ :region 'rows
+ :producer #'my-package--row-elements)
+```
+
+This skips the complete render function and refreshes only `rows`. It is a
+caller-owned performance promise: the updated state must not also affect the
+frame shell, responsive layout, another region, or a lifecycle effect. Use the
+automatic form unless a benchmark justifies taking on that responsibility.
+
+Unlike the removed `textui-route-state`, this fast path does not maintain a
+separate key-to-region graph. The state change, target, and producer remain
+together in one call.
+
+In the retained byte-compiled btop fixture with 1,000 process rows at 120
+columns, automatic reconciliation measured 4.14 ms median while this explicit
+fast path measured 2.36 ms, about 1.75 times faster. These figures describe one
+fixture and machine, not a general performance guarantee.
+
 Replace only that region at its current width:
 
 ```elisp
@@ -471,10 +501,9 @@ When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
 the buffer has already changed and does not follow it with another automatic
 refresh.
 
-For external data that does not live in `textui-state`, pass `:region` and
-`:producer` to `textui-update`, or request a region refresh directly. Those
-explicit paths are appropriate when the caller already knows the complete-line
-region that owns the external update.
+The same explicit path also works for external data when the caller already
+knows the complete-line region that owns the update. If no `textui-state`
+change is needed, request a region refresh directly.
 
 For bursts from timers and process callbacks, request the refresh instead:
 
@@ -591,7 +620,7 @@ rule for extracting general capabilities from prototypes is recorded in
 | Function                                                    | Purpose                                                 |
 |-------------------------------------------------------------|---------------------------------------------------------|
 | `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
-| `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state and request one reconciled refresh        |
+| `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state; reconcile automatically or name one region |
 | `(textui-set-state BUFFER KEY VALUE)`                        | Set one plist state key and request a refresh           |
 | `(textui-effect ID DEPENDENCIES SETUP)`                      | Reconcile a buffer-level lifecycle effect               |
 | `(textui-async-callback FUNCTION)`                           | Bind a callback to its effect and TextUI buffer         |

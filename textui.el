@@ -1846,7 +1846,8 @@ pending requests for the same BUFFER and ID keep only the latest PRODUCER."
   "Update live TextUI BUFFER state with UPDATER and request a refresh.
 UPDATER receives `textui-state' and returns its replacement.  Without REGION,
 TextUI reconciles the complete frame.  With REGION, PRODUCER refreshes that
-existing region directly."
+existing region directly without evaluating the complete frame; the caller
+must ensure the state change affects only that region."
   (if (not (buffer-live-p buffer))
       nil
     (unless (functionp updater)

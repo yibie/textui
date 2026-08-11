@@ -27,12 +27,28 @@ runnable benchmark is `test/performance/textui-btop-reconcile-benchmark.el`.
   frame. Existing reconciliation preserves unchanged named regions and patches
   changed regions when the frame shell is stable.
 - Keep `textui-refresh-region`, `textui-request-refresh-region`, and the
-  `:region`/`:producer` form of `textui-update`. They serve explicit external
-  updates whose caller already knows the owning complete-line region; they are
-  not inferred from application state.
+  `:region`/`:producer` form of `textui-update`. The latter is an explicit
+  performance fast path for a measured state update confined to one
+  complete-line region. The state change, target, and producer remain together
+  at the call site instead of forming a retained dependency graph. The same
+  region APIs also serve external updates whose caller already knows the
+  owning region.
 - Do not replace manual routes with automatic dependency tracking, a retained
   component tree, or another state model. The measured complete-frame path is
   already within the experiment's interaction budget.
+
+Automatic reconciliation is the default because TextUI can verify the complete
+result. The explicit fast path is a caller-owned promise that the state change
+does not affect the frame shell, responsive layout, another region, or a
+lifecycle effect. It should be introduced only after measuring the automatic
+path.
+
+After retaining that fast path, the benchmark was changed to compare both
+modes on the same revision. In the byte-compiled 1,000-row, 120-column fixture,
+automatic reconciliation measured a 4.14 ms median and 4.31 ms p95; explicit
+region update measured a 2.36 ms median and 2.48 ms p95. The fast path was
+about 1.75 times faster while keeping its dependency promise local to the
+update call.
 
 This supersedes ADR 0032 and narrows the state-routing language in ADR 0033.
 ADR 0031's buffer state and lifecycle-effect decisions remain unchanged.

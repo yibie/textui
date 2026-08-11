@@ -696,6 +696,51 @@
                   textui--widgets)))))
       (kill-buffer buffer))))
 
+(ert-deftest textui-update-supports-explicit-region-fast-path ()
+  (let ((buffer (generate-new-buffer " *textui-manual-region-test*"))
+        (renders 0)
+        scheduled)
+    (unwind-protect
+        (with-current-buffer buffer
+          (textui-mode)
+          (setq-local
+           textui--last-width 30
+           textui-state '(:count 0)
+           textui--render-function
+           (lambda (_width)
+             (setq renders (1+ renders))
+             `((:type :flex :direction :column :gap 0
+                :children
+                ((:type :flex :direction :column :gap 0
+                  :layout (:refresh-id changing)
+                  :children
+                  ((:type item :format "%v"
+                    :value ,(number-to-string
+                             (plist-get textui-state :count)))))
+                 (:type item :format "%v" :value "stable"))))))
+          (textui-refresh buffer)
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_time _repeat function &rest arguments)
+                       (setq scheduled (cons function arguments))
+                       'manual-region-timer)))
+            (textui-update
+             buffer
+             (lambda (state)
+               (plist-put (copy-sequence state) :count 1))
+             :region 'changing
+             :producer
+             (lambda (_width)
+               `((:type item :format "%v"
+                  :value ,(number-to-string
+                           (plist-get textui-state :count))))))
+            (should textui--region-refresh-timer)
+            (should-not textui--refresh-timer)
+            (apply (car scheduled) (cdr scheduled)))
+          (should (= renders 1))
+          (should (equal (textui-test--trimmed-lines (buffer-string))
+                         '("1" "stable"))))
+      (kill-buffer buffer))))
+
 (ert-deftest textui-action-respects-state-update-requested-refresh ()
   (let ((buffer (generate-new-buffer " *textui-state-action-test*"))
         (renders 0)
