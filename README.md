@@ -70,7 +70,7 @@ and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
 ## Releases
 
-The current release is 0.4.0. See the [changelog](CHANGELOG.md) for the complete
+The current release is 0.5.0. See the [changelog](CHANGELOG.md) for the complete
 version history. The measured refresh improvements and their fixture scope are
 summarized in [Performance history](CHANGELOG.md#performance-history); runnable
 diagnostics remain under
