@@ -1,7 +1,8 @@
 # TextUI owns the buffer runtime lifecycle
 
-State-to-region dependency routing is extended by
-[ADR 0032](0032-plist-state-keys-route-to-refresh-regions.md).
+The state-routing extension once recorded by ADR 0032 was superseded by
+[ADR 0035](0035-complete-state-reconciliation-replaces-manual-routes.md).
+The lifecycle decisions below remain in force.
 
 This decision supersedes the lifecycle-ownership parts of
 [ADR 0008](0008-external-state-changes-use-explicit-refresh.md),

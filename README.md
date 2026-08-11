@@ -45,7 +45,7 @@ TextUI borrows two ideas from htmx as engineering constraints:
 This is an analogy, not a Web programming model for Emacs.
 
 - Use native Emacs and `widget.el` facilities before adding a TextUI concept.
-- Keep a behaviour's declaration beside the element, state route, or effect it
+- Keep a behaviour's declaration beside the element or effect it
   governs; keep its implementation in ordinary Lisp functions.
 - Replace the complete frame or an explicitly named complete-line region. Do
   not maintain a parallel component tree or infer a reactive dependency graph.
@@ -123,7 +123,6 @@ The working model is small:
 
 ```text
 state + available width -> render function -> widget.el buffer
-declared state routes     -> affected refresh-region producers
 declared effects          -> managed timers, processes, and subscriptions
 ```
 
@@ -140,11 +139,10 @@ state.
 
 `textui-update` passes the current value to an updater, stores its return value,
 and requests one refresh. Several updates before Emacs processes its next timer
-event are combined. For plist state, TextUI identifies changed top-level keys
-and uses any matching state routes. If every changed key is covered, it skips
-the complete render function and runs only the affected region producers.
-Otherwise it reconciles the complete frame, preserving unchanged named regions
-when possible. If the updater signals an error, the old state is retained.
+event are combined. TextUI evaluates the complete render function and preserves
+unchanged named regions when possible, so package code does not maintain a
+second state-to-region dependency graph. If the updater signals an error, the
+old state is retained.
 
 For plist state, `textui-set-state` updates one key. Its value may be a literal
 or a function of the previous value:
@@ -432,20 +430,9 @@ refresh ID:
  :children (...))
 ```
 
-When top-level plist keys affect only that region, declare their route from the
-same render function:
-
-```elisp
-(textui-route-state
- 'rows
- '(:selected :filter)
- #'my-package--row-elements)
-```
-
-The route must name a refresh region present in that render. Its producer reads
-the current `textui-state`, receives the region's current content width, and
-returns replacement children. After this declaration, either of these updates
-automatically refreshes only `rows`:
+Ordinary state updates need no dependency declaration. Either of these updates
+evaluates the complete frame description, after which TextUI patches only the
+changed named regions when the surrounding shell remains stable:
 
 ```elisp
 (textui-set-state buffer :selected next-row)
@@ -458,10 +445,9 @@ automatically refreshes only `rows`:
      (plist-put next :filter query))))
 ```
 
-All changed keys must have routes. If one key is undeclared, TextUI uses a
-complete render because that key may affect the frame shell, layout, or an
-effect. Updaters should replace top-level plist values rather than mutate
-nested values in place so changed keys remain observable.
+This costs a complete layout calculation, but it cannot leave the interface
+stale when one state value starts affecting another region, the frame shell,
+responsive layout, or an effect.
 
 Replace only that region at its current width:
 
@@ -485,20 +471,10 @@ When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
 the buffer has already changed and does not follow it with another automatic
 refresh.
 
-Without a matching state route, `textui-update` renders the new frame
-description and automatically preserves unchanged named regions:
-
-```elisp
-(textui-update
- buffer
- (lambda (state)
-   (plist-put (copy-sequence state) :selected next-row)))
-```
-
-This fallback path computes the complete layout so it can safely detect
-structural changes. For external data that does not live in `textui-state`,
-pass `:region` and `:producer` to `textui-update`, or request a region refresh
-directly.
+For external data that does not live in `textui-state`, pass `:region` and
+`:producer` to `textui-update`, or request a region refresh directly. Those
+explicit paths are appropriate when the caller already knows the complete-line
+region that owns the external update.
 
 For bursts from timers and process callbacks, request the refresh instead:
 
@@ -617,7 +593,6 @@ rule for extracting general capabilities from prototypes is recorded in
 | `(textui-open NAME RENDER-FUNCTION &optional INITIAL-STATE)` | Display or reuse a stable TextUI buffer                 |
 | `(textui-update BUFFER UPDATER &key REGION PRODUCER)`        | Replace state and request one reconciled refresh        |
 | `(textui-set-state BUFFER KEY VALUE)`                        | Set one plist state key and request a refresh           |
-| `(textui-route-state REGION KEYS PRODUCER)`                  | Route plist-key changes to one named refresh region     |
 | `(textui-effect ID DEPENDENCIES SETUP)`                      | Reconcile a buffer-level lifecycle effect               |
 | `(textui-async-callback FUNCTION)`                           | Bind a callback to its effect and TextUI buffer         |
 | `(textui-request-refresh BUFFER)`                            | Coalesce and reconcile one frame refresh                |

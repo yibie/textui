@@ -771,8 +771,8 @@
           (should (equal (buffer-string) "2")))
       (kill-buffer buffer))))
 
-(ert-deftest textui-update-reconciles-declared-route-keys-safely ()
-  (let ((buffer (generate-new-buffer " *textui-state-route-test*"))
+(ert-deftest textui-update-reconciles-multiple-state-keys-safely ()
+  (let ((buffer (generate-new-buffer " *textui-multiple-state-test*"))
         (renders 0)
         (scheduled-count 0)
         scheduled)
@@ -785,16 +785,6 @@
            textui--render-function
            (lambda (_width)
              (setq renders (1+ renders))
-             (textui-route-state
-              'left '(:left)
-              (lambda (_width)
-                `((:type item :format "%v"
-                   :value ,(plist-get textui-state :left)))))
-             (textui-route-state
-              'right '(:right)
-              (lambda (_width)
-                `((:type item :format "%v"
-                   :value ,(plist-get textui-state :right)))))
              `((:type :flex :direction :column :gap 0
                 :children
                 ((:type :flex :direction :column :gap 0
@@ -814,7 +804,7 @@
                      (lambda (_time _repeat function &rest arguments)
                        (setq scheduled-count (1+ scheduled-count)
                              scheduled (cons function arguments))
-                       'state-route-timer)))
+                       'multiple-state-timer)))
             (textui-update
              buffer
              (lambda (state)
@@ -842,8 +832,8 @@
                            '("L1" "R1" "S1")))))
       (kill-buffer buffer))))
 
-(ert-deftest textui-routed-state-change-keeps-frame-shell-current ()
-  (let ((buffer (generate-new-buffer " *textui-route-shell-test*"))
+(ert-deftest textui-state-change-keeps-frame-shell-current ()
+  (let ((buffer (generate-new-buffer " *textui-state-shell-test*"))
         scheduled)
     (unwind-protect
         (with-current-buffer buffer
@@ -853,11 +843,6 @@
            textui-state '(:value "old")
            textui--render-function
            (lambda (_width)
-             (textui-route-state
-              'body '(:value)
-              (lambda (_width)
-                `((:type item :format "%v"
-                   :value ,(plist-get textui-state :value)))))
              `((:type :flex :direction :column :gap 0
                 :children
                 ((:type :flex :direction :column :gap 0
@@ -871,34 +856,11 @@
           (cl-letf (((symbol-function 'run-at-time)
                      (lambda (_time _repeat function &rest arguments)
                        (setq scheduled (cons function arguments))
-                       'route-shell-timer)))
+                       'state-shell-timer)))
             (textui-set-state buffer :value "new")
             (apply (car scheduled) (cdr scheduled)))
           (should (equal (textui-test--trimmed-lines (buffer-string))
                          '("new" "new"))))
-      (kill-buffer buffer))))
-
-(ert-deftest textui-state-route-must-name-a-rendered-region ()
-  (let ((buffer (generate-new-buffer " *textui-invalid-state-route-test*")))
-    (unwind-protect
-        (with-current-buffer buffer
-          (textui-mode)
-          (setq-local textui--last-width 30
-                      textui-state '(:value "old")
-                      textui--render-function
-                      (lambda (_width)
-                        `((:type item :format "%v"
-                           :value ,(plist-get textui-state :value)))))
-          (textui-refresh buffer)
-          (setq-local
-           textui--render-function
-           (lambda (_width)
-             (textui-route-state 'missing '(:value) #'ignore)
-             '((:type item :format "%v" :value "new"))))
-          (let ((error-data (should-error (textui-refresh buffer))))
-            (should (string-match-p "Unknown state route region"
-                                    (error-message-string error-data))))
-          (should (equal (buffer-string) "old")))
       (kill-buffer buffer))))
 
 (ert-deftest textui-effect-follows-rendered-dependencies ()

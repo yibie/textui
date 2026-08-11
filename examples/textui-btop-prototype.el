@@ -711,7 +711,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
                           (when selected '(:focus-id btop-process)))
           :action
           (lambda (&rest _)
-            (textui-btop-prototype--update-lower
+            (textui-update
+             (current-buffer)
              (lambda (state)
                (textui-btop-prototype--state-with
                 state :process-index index)))))))
@@ -901,10 +902,6 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 
 (defun textui-btop-prototype--frame (width)
   "Return complete btop-like frame for WIDTH."
-  (textui-route-state
-   'btop-lower
-   '(:process-index :sort-index :reversed :filter :details)
-   #'textui-btop-prototype--lower-elements)
   (textui-effect 'btop-sampler
                  (list (textui-btop-prototype--state :paused))
                  #'textui-btop-prototype--sampling-effect)
@@ -931,16 +928,13 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
     (textui-refresh-region
      (current-buffer) 'btop-cpu #'textui-btop-prototype--cpu-elements)))
 
-(defun textui-btop-prototype--update-lower (updater)
-  "Apply state UPDATER; TextUI routes its changed keys to the lower region."
-  (textui-update (current-buffer) updater))
-
 (defun textui-btop-prototype-move (amount)
   "Move process selection by AMOUNT."
   (interactive "p")
   (let ((maximum (max 0 (1- (length
                              (textui-btop-prototype--ordered-processes))))))
-    (textui-btop-prototype--update-lower
+    (textui-update
+     (current-buffer)
      (lambda (state)
        (textui-btop-prototype--state-with
         state :process-index
@@ -961,7 +955,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-toggle-details ()
   "Toggle selected process details."
   (interactive)
-  (textui-btop-prototype--update-lower
+  (textui-update
+   (current-buffer)
    (lambda (state)
      (textui-btop-prototype--state-with
       state :details (not (plist-get state :details))))))
@@ -974,7 +969,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-cycle-sort (amount)
   "Cycle process sorting by AMOUNT."
   (interactive "p")
-  (textui-btop-prototype--update-lower
+  (textui-update
+   (current-buffer)
    (lambda (state)
      (textui-btop-prototype--state-with
       state
@@ -984,7 +980,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-toggle-reverse ()
   "Reverse the process ordering."
   (interactive)
-  (textui-btop-prototype--update-lower
+  (textui-update
+   (current-buffer)
    (lambda (state)
      (textui-btop-prototype--state-with
       state
@@ -994,7 +991,8 @@ FACE may be a top-to-bottom vector of faces.  MAXIMUM defaults to 100."
 (defun textui-btop-prototype-toggle-filter ()
   "Toggle a visible prototype process filter."
   (interactive)
-  (textui-btop-prototype--update-lower
+  (textui-update
+   (current-buffer)
    (lambda (state)
      (textui-btop-prototype--state-with
       state

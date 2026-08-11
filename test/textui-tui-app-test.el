@@ -81,7 +81,7 @@
       (cl-letf (((symbol-function 'run-at-time)
                  (lambda (_time _repeat function &rest arguments)
                    (setq scheduled (cons function arguments))
-                   'btop-state-route-timer)))
+                   'btop-state-update-timer)))
         (textui-btop-prototype-toggle-details)
         (should textui--refresh-timer)
         (should-not textui--region-refresh-timer)
