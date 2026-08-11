@@ -7,6 +7,7 @@ calendar date.
 
 | Release | Fixture | Before | After | Change |
 |---|---|---:|---:|---:|
+| 0.5.1 | btop, 1,000 process rows at 120 columns | 4.14 ms, automatic reconciliation | 2.36 ms, explicit region update | 1.75x faster opt-in path |
 | 0.5.0 | btop, 1,000 process rows at 120 columns | 2.39 ms, state routing | 4.13 ms, complete reconciliation | 1.74 ms spent to remove manual dependencies |
 | 0.2.0 | btop, one routed detail update across 50 process rows | 11.65 ms, full refresh | 5.67 ms, state-to-region routing | 2.05x faster |
 | 0.3.0, public extension in 0.4.0 | Full refresh of 3,000 native controls | 596.55 ms, generic native path | 238.58 ms, attached path | 2.50x faster |
@@ -16,6 +17,8 @@ cross-machine guarantees. The retained diagnostic programs and instructions
 are under [`test/performance/`](test/performance/README.md).
 
 ## Unreleased
+
+## [0.5.1] - 2026-08-11
 
 ### Documentation
 
@@ -120,6 +123,7 @@ are under [`test/performance/`](test/performance/README.md).
 - In the btop 50-process fixture, routed detail updates improved from a median
   of 11.65 ms to 5.67 ms while retaining native `widget.el` push-button rows.
 
+[0.5.1]: https://github.com/yibie/textui/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yibie/textui/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yibie/textui/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yibie/textui/compare/v0.2.0...v0.3.0
