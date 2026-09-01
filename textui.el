@@ -668,14 +668,22 @@ Optional LIMITS caps each returned share."
                                   :width image-width :height image-height
                                   :ascent 'center)))
         (dotimes (row rows)
-          (let ((line (make-string width ?\s)))
+          (let ((line (string-to-multibyte (make-string width ?\s))))
             (when (and (>= row top) (< row (+ top image-rows)))
               (let ((slice-row (- row top)))
                 (when (= slice-row 0)
-                  (store-substring
-                   line left
-                   (truncate-string-to-width
-                    (textui--image-alt element) image-columns nil nil "…")))
+                  (let ((alternative
+                         (truncate-string-to-width
+                          (textui--image-alt element)
+                          image-columns nil nil "…")))
+                    ;; Concatenation keeps the alternative text's properties;
+                    ;; `store-substring' copies only characters and also
+                    ;; rejects non-byte characters in a unibyte target.
+                    (setq line
+                          (concat
+                           (substring line 0 left)
+                           alternative
+                           (substring line (+ left (length alternative)))))))
                 (put-text-property
                  left (+ left image-columns) 'display
                  (list (list 'slice 0.0

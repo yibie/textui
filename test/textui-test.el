@@ -461,6 +461,42 @@
       (should (equal (car second-slice) '(slice 0.0 0.5 1.0 0.5)))
       (should-not (get-text-property 0 'display (nth 3 lines))))))
 
+(ert-deftest textui-native-image-preserves-cjk-alt-properties ()
+  (let ((alt (propertize "中文图注" 'textui-test-anchor 'source)))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _display) t))
+              ((symbol-function 'file-readable-p)
+               (lambda (_file) t))
+              ((symbol-function 'frame-char-width)
+               (lambda (&optional _frame) 10))
+              ((symbol-function 'frame-char-height)
+               (lambda (&optional _frame) 20))
+              ((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest properties)
+                 (cons 'image (append (list :file file) properties))))
+              ((symbol-function 'image-size)
+               (lambda (&rest _arguments) '(100 . 40))))
+      (let* ((rendered
+              (textui--render-frame
+               (list (list :type :image :file "image.png"
+                           :rows 2 :alt alt))
+               10))
+             (lines (split-string rendered "\n"))
+             (anchor-position
+              (cl-loop for line in lines
+                       for position =
+                       (text-property-any
+                        0 (length line) 'textui-test-anchor 'source line)
+                       when position return (cons line position))))
+        (should (= (length lines) 2))
+        (should (equal (substring-no-properties (car lines) 0 4)
+                       "中文图注"))
+        (should anchor-position)
+        (should (eq (get-text-property
+                     (cdr anchor-position) 'textui-test-anchor
+                     (car anchor-position))
+                    'source))))))
+
 (ert-deftest textui-image-leaf-falls-back-when-file-is-unreadable ()
   (cl-letf (((symbol-function 'display-graphic-p)
              (lambda (&optional _display) t))
