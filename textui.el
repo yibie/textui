@@ -36,6 +36,8 @@
 ;;
 ;;   (:type :text :value "A long paragraph"
 ;;    :layout (:width 40 :min-width 16 :grow 1))
+;; Set `:wrap' to `greedy' for a kinsoku-aware low-latency path; the default
+;; `balanced' strategy uses Knuth--Plass justification.
 ;;
 ;; A `:image' leaf fits a native image into an explicit number of rows:
 ;;
@@ -77,6 +79,15 @@
 
 (declare-function textui-kp-core-justify-lines
                   "textui-kp-core" (source attributed line-pixel))
+(declare-function textui-kp-core-greedy-lines
+                  "textui-kp-core" (source attributed line-pixel))
+
+(defcustom textui-text-layout-cache-size 2048
+  "Maximum paragraph layouts retained by each TextUI buffer.
+The cache is cleared as one generation when this many entries are reached.
+Set it to zero to disable text layout caching."
+  :type 'integer
+  :group 'textui)
 
 (defvar-local textui--render-function nil)
 (defvar-local textui--last-width nil)
@@ -99,6 +110,8 @@
 (defvar-local textui--pending-focus nil)
 (defvar-local textui--resize-cursor-timer nil)
 (defvar-local textui--cursor-type-before-resize nil)
+(defvar-local textui--text-layout-cache nil
+  "Cached width-aware paragraph lines for the current TextUI buffer.")
 
 (defvar-local textui-state nil
   "Application state owned by the current TextUI buffer.")
@@ -229,11 +242,15 @@ PROPERTIES lists every accepted property."
   "Validate the width-aware TextUI text ELEMENT."
   (let ((cursor element))
     (while cursor
-      (unless (memq (car cursor) '(:type :value :layout))
+      (unless (memq (car cursor) '(:type :value :wrap :layout))
         (error "Unknown :text property: %S" (car cursor)))
       (setq cursor (cddr cursor))))
   (unless (stringp (plist-get element :value))
     (error ":text :value must be a string: %S" (plist-get element :value)))
+  (when (and (textui--plist-member-p element :wrap)
+             (not (memq (plist-get element :wrap) '(balanced greedy))))
+    (error ":text :wrap must be balanced or greedy: %S"
+           (plist-get element :wrap)))
   (textui--validate-layout-options element nil))
 
 (defun textui--validate-image (element)
@@ -580,31 +597,67 @@ Optional LIMITS caps each returned share."
     (push (cons start (length string)) ranges)
     (nreverse ranges)))
 
-(defun textui--text-plan-lines (source attributed pixel-width)
-  "Break SOURCE and return matching substrings from ATTRIBUTED."
+(defun textui--text-plan-lines
+    (source attributed pixel-width &optional strategy)
+  "Break SOURCE and return matching substrings from ATTRIBUTED.
+STRATEGY is `balanced' by default or the low-latency `greedy' path."
   (if (string-empty-p source)
       (list "")
     (require 'textui-kp-core)
-    (textui-kp-core-justify-lines source attributed pixel-width)))
+    (pcase (or strategy 'balanced)
+      ('balanced
+       (textui-kp-core-justify-lines source attributed pixel-width))
+      ('greedy
+       (textui-kp-core-greedy-lines source attributed pixel-width))
+      (_ (error "Unknown TextUI text wrapping strategy: %S" strategy)))))
 
-(defun textui--wrap-text (string width)
-  "Return STRING wrapped by the vendored EKP core for WIDTH cells."
+(defun textui--text-layout-context (string pixel-width strategy)
+  "Return a cache key for STRING, PIXEL-WIDTH, and wrapping STRATEGY."
+  (list (substring-no-properties string)
+        (object-intervals string)
+        pixel-width strategy
+        (copy-tree face-remapping-alist)
+        (frame-char-width (selected-frame))
+        (frame-char-height (selected-frame))))
+
+(defun textui--copy-text-lines (lines)
+  "Return independent string copies of LINES."
+  (mapcar #'copy-sequence lines))
+
+(defun textui--wrap-text (string width &optional strategy)
+  "Return STRING wrapped for WIDTH cells using optional STRATEGY."
   (let ((attributed (copy-sequence string))
         (pixel-width (textui--text-pixel-width width))
+        cache key cached
         lines)
     (dotimes (offset (length attributed))
       (put-text-property offset (1+ offset)
                          'textui--text-source-offset offset attributed))
-    (dolist (range (textui--text-hard-line-ranges string) lines)
-      (let ((start (car range))
-            (end (cdr range)))
-        (setq lines
-              (append
-               lines
-               (textui--text-plan-lines
-                (substring string start end)
-                (substring attributed start end)
-                pixel-width)))))))
+    (setq cache
+          (or textui--text-layout-cache
+              (setq textui--text-layout-cache
+                    (make-hash-table :test #'equal))))
+    (setq key (textui--text-layout-context
+               string pixel-width (or strategy 'balanced))
+          cached (and (> textui-text-layout-cache-size 0)
+                      (gethash key cache 'textui--cache-miss)))
+    (if (not (eq cached 'textui--cache-miss))
+        (textui--copy-text-lines cached)
+      (dolist (range (textui--text-hard-line-ranges string))
+        (let ((start (car range))
+              (end (cdr range)))
+          (setq lines
+                (append
+                 lines
+                 (textui--text-plan-lines
+                  (substring string start end)
+                  (substring attributed start end)
+                  pixel-width strategy)))))
+      (when (> textui-text-layout-cache-size 0)
+        (when (>= (hash-table-count cache) textui-text-layout-cache-size)
+          (clrhash cache))
+        (puthash key (textui--copy-text-lines lines) cache))
+      lines)))
 
 (defun textui--render-text-spec (spec width)
   "Render width-aware text SPEC into WIDTH."
@@ -612,7 +665,8 @@ Optional LIMITS caps each returned share."
          (lines
           (textui--wrap-text
            (plist-get (plist-get spec :element) :value)
-           (max 1 width))))
+           (max 1 width)
+           (plist-get (plist-get spec :element) :wrap))))
     (dolist (line lines lines)
       (when (> (length line) 0)
         (put-text-property 0 (length line)
@@ -679,7 +733,8 @@ available without showing alternative text outside the actual image slice."
             (not (display-graphic-p frame))
             (not (file-readable-p (plist-get element :file))))
         (setq lines (textui--image-fallback-lines element width))
-      (let* ((cell-width (frame-char-width frame))
+      (condition-case nil
+          (let* ((cell-width (frame-char-width frame))
              (cell-height (frame-char-height frame))
              (source
               (or (create-image (plist-get element :file) nil nil :scale 1)
@@ -731,7 +786,11 @@ available without showing alternative text outside the actual image slice."
                        image)
                  line)))
             (push line lines)))
-        (setq lines (nreverse lines))))
+            (setq lines (nreverse lines)))
+        ;; Unsupported or corrupt image data is content-level failure.  Keep
+        ;; the TextUI frame usable and preserve its fixed-row alt contract.
+        (error
+         (setq lines (textui--image-fallback-lines element width)))))
     (textui--tag-layout-cells lines (plist-get spec :location-id))))
 
 (defun textui--render-native-spec (spec width)

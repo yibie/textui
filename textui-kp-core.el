@@ -573,6 +573,77 @@
                   line-index (1+ line-index))))
         (or (nreverse ranges) (list (cons 0 (length string))))))))
 
+(defun textui-kp-core--greedy-ranges (string line-pixel)
+  "Return linear, width-bounded source ranges for STRING at LINE-PIXEL.
+The greedy path keeps the same tokenization and kinsoku constraints as the
+balanced Knuth--Plass path, but does not allocate or optimize a paragraph-wide
+break graph."
+  (if (string-empty-p string)
+      (list (cons 0 0))
+    (let* ((boxes (textui-kp-core--split-tokens
+                   string (textui-kp-core--split-boxes string)))
+           (count (length boxes))
+           (types (vconcat (mapcar #'textui-kp-core--box-type boxes)))
+           (offsets (textui-kp-core--box-offsets string boxes))
+           (widths (textui-kp-core--measure-boxes boxes))
+           (word-space (textui-kp-core--word-space-width string))
+           (mixed-space (max 0 (1- word-space)))
+           (start 0)
+           ranges)
+      (while (< start count)
+        ;; A wrapped line never starts with literal source whitespace.
+        (while (and (< start count)
+                    (eq (car (aref types start)) 'space))
+          (setq start (1+ start)))
+        (when (< start count)
+          (let ((end start)
+                (pixels 0)
+                best)
+            (while (< end count)
+              (let* ((glue-type
+                      (if (= end start)
+                          'nws
+                        (textui-kp-core--glue-type
+                         (aref types (1- end)) (aref types end))))
+                     (next-pixels
+                      (+ pixels (aref widths end)
+                         (textui-kp-core--glue-ideal-pixel
+                          glue-type word-space mixed-space))))
+                (if (and (> next-pixels line-pixel) (> end start))
+                    (setq end count)
+                  (setq pixels next-pixels
+                        end (1+ end))
+                  (when (or (= end count)
+                            (not (textui-kp-core--break-forbidden-p
+                                  boxes types end)))
+                    (setq best end)))))
+            ;; A single oversized token, or a kinsoku run wider than the line,
+            ;; still has to make forward progress to the next legal boundary.
+            (unless best
+              (setq best (1+ start))
+              (while (and (< best count)
+                          (textui-kp-core--break-forbidden-p
+                           boxes types best))
+                (setq best (1+ best))))
+            (let ((kept-end best))
+              (while (and (> kept-end start)
+                          (eq (car (aref types (1- kept-end))) 'space))
+                (setq kept-end (1- kept-end)))
+              (when (> kept-end start)
+                (push (cons (car (aref offsets start))
+                            (cdr (aref offsets (1- kept-end))))
+                      ranges)))
+            (setq start best))))
+      (or (nreverse ranges) (list (cons 0 (length string)))))))
+
+(defun textui-kp-core-greedy-lines (source attributed line-pixel)
+  "Greedily wrap SOURCE and return matching ATTRIBUTED substrings.
+This is TextUI's low-latency line-breaking path.  It preserves source text
+properties and the core CJK line-start/line-end prohibitions."
+  (mapcar (lambda (range)
+            (substring attributed (car range) (cdr range)))
+          (textui-kp-core--greedy-ranges source line-pixel)))
+
 (defun textui-kp-core--ragged-ranges (string line-pixel)
   "Return width-safe, naturally spaced source ranges for STRING."
   (if (string-empty-p string)

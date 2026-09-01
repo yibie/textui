@@ -67,7 +67,9 @@ A TextUI-owned keyword element that turns content into a width-aware block but
 has no children or interaction behavior. TextUI owns `:text` because wrapping
 at an allocated width is layout work, and `:image` because fitting a native
 image into a character grid requires layout geometry. Rendering leaves are not
-an application component catalogue.
+an application component catalogue. A `:text` leaf may select `:wrap greedy`
+for kinsoku-aware low-latency ragged wrapping; its default `balanced` strategy
+uses Knuth–Plass justification. TextUI owns a bounded per-buffer layout cache.
 _Avoid_: Widget, control, component
 
 **Image leaf**:

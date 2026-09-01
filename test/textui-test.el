@@ -581,6 +581,25 @@
         '((:type :image :file "missing.png" :rows 2 :alt "missing")) 10))
       "missing   \n          "))))
 
+(ert-deftest textui-image-leaf-falls-back-when-native-decoding-fails ()
+  "Unsupported but readable image members must not abort the frame."
+  (let ((fixture (make-temp-file "textui-unsupported-image-")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'display-graphic-p)
+                   (lambda (&optional _display) t))
+                  ((symbol-function 'create-image)
+                   (lambda (&rest _arguments)
+                     (error "unsupported image data"))))
+          (should
+           (equal
+            (substring-no-properties
+             (textui--render-frame
+              (list (list :type :image :file fixture
+                          :rows 2 :alt "fallback"))
+              10))
+            "fallback  \n          ")))
+      (delete-file fixture))))
+
 (ert-deftest textui-text-leaf-preserves-hard-lines-and-properties ()
   (let ((value (copy-sequence "first line\n\nsecond line")))
     (put-text-property 12 18 'face 'bold value)
@@ -631,6 +650,53 @@
                           (point) 'textui--text-source-offset)
                          source-offset)))))
       (kill-buffer buffer))))
+
+(ert-deftest textui-greedy-wrap-preserves-cjk-kinsoku-and-properties ()
+  "The low-latency text path must keep source metadata and legal CJK breaks."
+  (require 'textui-kp-core)
+  (let* ((source (propertize "甲乙，丙丁戊己" 'fixture-source 'kept))
+         (lines
+          (cl-letf (((symbol-function 'textui-kp-core--pixel-width)
+                     (lambda (string) (string-width string))))
+            (textui-kp-core-greedy-lines source source 4))))
+    (should (> (length lines) 1))
+    (should (equal (mapconcat #'substring-no-properties lines "")
+                   (substring-no-properties source)))
+    (dolist (line lines)
+      (should (eq (get-text-property 0 'fixture-source line) 'kept))
+      (should-not (string-match-p "\\`[，。！？、]" line)))))
+
+(ert-deftest textui-text-layout-cache-reuses-an-identical-plan ()
+  "A second render of identical attributed prose must not measure it again."
+  (with-temp-buffer
+    (textui-mode)
+    (let ((calls 0)
+          (source (propertize "缓存应保留来源属性" 'fixture-source 'same)))
+      (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                 (lambda (_source attributed _pixels)
+                   (setq calls (1+ calls))
+                   (list attributed))))
+        (let ((first (textui--wrap-text source 20 'greedy))
+              (second (textui--wrap-text source 20 'greedy)))
+          (should (= calls 1))
+          (should-not (eq (car first) (car second)))
+          (should (eq (get-text-property
+                       0 'fixture-source (car second))
+                      'same)))))))
+
+(ert-deftest textui-text-layout-cache-separates-display-contexts ()
+  "Face remapping changes must not reuse a stale text layout."
+  (with-temp-buffer
+    (textui-mode)
+    (let ((calls 0))
+      (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                 (lambda (_source attributed _pixels)
+                   (setq calls (1+ calls))
+                   (list attributed))))
+        (textui--wrap-text "scale sensitive" 20 'greedy)
+        (setq-local face-remapping-alist '((default (:height 1.5))))
+        (textui--wrap-text "scale sensitive" 20 'greedy)
+        (should (= calls 2))))))
 
 (ert-deftest textui-action-refreshes-once-after-success ()
   (let ((state 0)

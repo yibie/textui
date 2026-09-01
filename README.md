@@ -275,6 +275,23 @@ fake a full line with trailing filler. The last line remains naturally
 ragged-right. Source characters and source offsets are retained so point can
 follow the same text after reflow.
 
+For latency-sensitive prose, set `:wrap` to `greedy`. This path keeps the same
+tokenization, pixel measurement, source properties, and CJK kinsoku
+constraints, but chooses the furthest legal break in one pass and leaves every
+line ragged-right. The default `balanced` value retains Knuth–Plass:
+
+```elisp
+(:type :text
+ :value long-article
+ :wrap greedy
+ :layout (:min-width 24 :grow 1))
+```
+
+Each TextUI buffer caches bounded paragraph layouts by attributed text, width,
+wrapping strategy, and display context. Identical refreshes and chapter
+revisits therefore reuse line plans without leaking source properties between
+different strings or font scales.
+
 The Knuth–Plass implementation in `textui-kp-core.el` is adapted from Kinney
 Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp), specifically
 [`e823d89`](https://github.com/Kinneyzhang/emacs-kp/commit/e823d89a4a5097dce0316ba66c83cf44e98f3aa8).
