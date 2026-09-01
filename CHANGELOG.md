@@ -16,18 +16,38 @@ These are medians from fixed fixtures on the release machine, not
 cross-machine guarantees. The retained diagnostic programs and instructions
 are under [`test/performance/`](test/performance/README.md).
 
-## Unreleased
+## [0.6.0] - 2026-09-01
+
+### Added
+
+- `:text` accepts `:wrap` with `balanced` (default, Knuth–Plass) or `greedy`,
+  a linear-time low-latency break strategy for interactive readers.
+- A bounded paragraph layout cache (`textui-text-layout-cache-size`, default
+  2048 entries) memoizes text planning per content, pixel width, and wrap
+  strategy, with `textui-invalidate-text-layout-cache` as the manual escape
+  hatch. See ADR 0036 for the alignment contract.
 
 ### Changed
 
-- `:text :wrap greedy` now changes break selection without changing TextUI's
+- `:text :wrap greedy` changes break selection without changing TextUI's
   non-final-line pixel-justification contract. It remains kinsoku-aware and
   preserves attributed source characters.
 - Paragraph cache keys include resolved named-face metrics and a theme/font
-  environment generation. A zero cache size plans text directly, and
-  `textui-invalidate-text-layout-cache` covers direct fontset mutations.
+  environment generation, and they track `face-remap-alist` entries in both
+  proper-list and dotted-pair forms. A zero cache size plans text directly.
 
 ### Fixed
+
+- The graphical `:image` path built its rows as unibyte strings and spliced
+  the alternative text with `store-substring`, so a CJK alt signaled
+  "Attempt to store non-byte value into unibyte string" and text properties
+  on the alt were dropped. Rows are now multibyte and property-preserving.
+- Alt splicing is now bounded by both display width and character count, so
+  combining-mark or variation-selector sequences whose character count
+  exceeds their display width no longer signal `args-out-of-range`.
+- A letterboxed image places its alt and its property carrier on the leaf's
+  first row, so external row-range bookkeeping starts at the leaf instead of
+  the first visible slice.
 
 - An action-triggered refresh read `textui--focus-before-command` and
   `textui--position-before-command` as plain variables. Both are buffer-local
