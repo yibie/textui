@@ -777,6 +777,32 @@
         (textui--wrap-text "scale sensitive" 20 'greedy)
         (should (= calls 2))))))
 
+(ert-deftest textui-text-layout-cache-resolves-named-remap-faces ()
+  "Changing a named face used by a remap must invalidate line plans."
+  (require 'textui-kp-core)
+  (let ((original-height
+         (face-attribute 'textui-test-layout-cache-face :height nil t)))
+    (unwind-protect
+        (with-temp-buffer
+          (textui-mode)
+          (setq-local
+           face-remapping-alist
+           '((default textui-test-layout-cache-face)))
+          (set-face-attribute
+           'textui-test-layout-cache-face nil :height 1.0)
+          (let ((calls 0))
+            (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                       (lambda (_source attributed _pixels)
+                         (setq calls (1+ calls))
+                         (list attributed))))
+              (textui--wrap-text "remapped prose" 20 'greedy)
+              (set-face-attribute
+               'textui-test-layout-cache-face nil :height 2.0)
+              (textui--wrap-text "remapped prose" 20 'greedy)
+              (should (= calls 2)))))
+      (set-face-attribute
+       'textui-test-layout-cache-face nil :height original-height))))
+
 (ert-deftest textui-action-refreshes-once-after-success ()
   (let ((state 0)
         (renders 0)

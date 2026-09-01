@@ -653,8 +653,13 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
     (cl-delete-duplicates faces :test #'eq)))
 
 (defun textui--text-face-metric-signature (string)
-  "Return resolved named-face metrics relevant to STRING."
-  (let ((frame (selected-frame)))
+  "Return resolved named-face metrics relevant to STRING and its remaps."
+  (let ((frame (selected-frame))
+        (faces
+         (cl-delete-duplicates
+          (append (textui--text-referenced-faces string)
+                  (textui--face-symbols face-remapping-alist))
+          :test #'eq)))
     (mapcar
      (lambda (face)
        (cons
@@ -664,7 +669,7 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
            (cons attribute
                  (face-attribute face attribute frame 'default)))
          textui--text-metric-face-attributes)))
-     (textui--text-referenced-faces string))))
+     faces)))
 
 (defun textui--text-layout-context (string pixel-width strategy)
   "Return a cache key for STRING, PIXEL-WIDTH, and wrapping STRATEGY."
