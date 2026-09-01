@@ -18,6 +18,15 @@ are under [`test/performance/`](test/performance/README.md).
 
 ## Unreleased
 
+### Changed
+
+- `:text :wrap greedy` now changes break selection without changing TextUI's
+  non-final-line pixel-justification contract. It remains kinsoku-aware and
+  preserves attributed source characters.
+- Paragraph cache keys include resolved named-face metrics and a theme/font
+  environment generation. A zero cache size plans text directly, and
+  `textui-invalidate-text-layout-cache` covers direct fontset mutations.
+
 ## [0.5.1] - 2026-08-11
 
 ### Documentation

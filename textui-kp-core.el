@@ -636,14 +636,6 @@ break graph."
             (setq start best))))
       (or (nreverse ranges) (list (cons 0 (length string)))))))
 
-(defun textui-kp-core-greedy-lines (source attributed line-pixel)
-  "Greedily wrap SOURCE and return matching ATTRIBUTED substrings.
-This is TextUI's low-latency line-breaking path.  It preserves source text
-properties and the core CJK line-start/line-end prohibitions."
-  (mapcar (lambda (range)
-            (substring attributed (car range) (cdr range)))
-          (textui-kp-core--greedy-ranges source line-pixel)))
-
 (defun textui-kp-core--ragged-ranges (string line-pixel)
   "Return width-safe, naturally spaced source ranges for STRING."
   (if (string-empty-p string)
@@ -885,19 +877,32 @@ LAST-LINE keeps its natural ragged-right spacing."
                                'textui--pixel-justified t line))
           line)))))
 
-(defun textui-kp-core-justify-lines (source attributed line-pixel)
-  "Break SOURCE and pixel-justify matching ATTRIBUTED text to LINE-PIXEL."
-  (let* ((ranges (textui-kp-core-break-lines source line-pixel))
-         (last-index (1- (length ranges)))
-         (index 0)
-         lines)
-    (dolist (range ranges)
+(defun textui-kp-core--justify-ranges (ranges attributed line-pixel)
+  "Pixel-justify ATTRIBUTED substrings selected by RANGES."
+  (let ((last-index (1- (length ranges)))
+        (index 0)
+        lines)
+    (dolist (range ranges (nreverse lines))
       (push (textui-kp-core--justify-line
              (substring attributed (car range) (cdr range))
              line-pixel (= index last-index))
             lines)
-      (setq index (1+ index)))
-    (setq lines (nreverse lines))
+      (setq index (1+ index)))))
+
+(defun textui-kp-core-greedy-lines (source attributed line-pixel)
+  "Greedily break SOURCE and justify matching ATTRIBUTED text.
+This low-latency path preserves source properties and the core CJK
+line-start/line-end prohibitions.  Only break selection differs from the
+balanced Knuth--Plass path; both justify non-final lines."
+  (textui-kp-core--justify-ranges
+   (textui-kp-core--greedy-ranges source line-pixel)
+   attributed line-pixel))
+
+(defun textui-kp-core-justify-lines (source attributed line-pixel)
+  "Break SOURCE and pixel-justify matching ATTRIBUTED text to LINE-PIXEL."
+  (let* ((ranges (textui-kp-core-break-lines source line-pixel))
+         (lines (textui-kp-core--justify-ranges
+                 ranges attributed line-pixel)))
     (if (seq-some
          (lambda (line)
            (and (> (length line) 0)

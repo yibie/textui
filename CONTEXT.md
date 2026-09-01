@@ -68,8 +68,10 @@ has no children or interaction behavior. TextUI owns `:text` because wrapping
 at an allocated width is layout work, and `:image` because fitting a native
 image into a character grid requires layout geometry. Rendering leaves are not
 an application component catalogue. A `:text` leaf may select `:wrap greedy`
-for kinsoku-aware low-latency ragged wrapping; its default `balanced` strategy
-uses Knuth–Plass justification. TextUI owns a bounded per-buffer layout cache.
+for kinsoku-aware low-latency break selection; its default `balanced` strategy
+uses Knuth–Plass break selection. Both pixel-justify non-final lines. TextUI
+owns a bounded per-buffer layout cache whose display generation is invalidated
+by relevant face, theme, and font changes.
 _Avoid_: Widget, control, component
 
 **Image leaf**:

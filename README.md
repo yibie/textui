@@ -276,9 +276,10 @@ ragged-right. Source characters and source offsets are retained so point can
 follow the same text after reflow.
 
 For latency-sensitive prose, set `:wrap` to `greedy`. This path keeps the same
-tokenization, pixel measurement, source properties, and CJK kinsoku
-constraints, but chooses the furthest legal break in one pass and leaves every
-line ragged-right. The default `balanced` value retains Knuth–Plass:
+tokenization, pixel measurement, source properties, CJK kinsoku constraints,
+and non-final-line pixel justification, but chooses the furthest legal break
+in one pass. The default `balanced` value uses Knuth–Plass to choose its break
+sequence before applying the same line justification:
 
 ```elisp
 (:type :text
@@ -288,9 +289,13 @@ line ragged-right. The default `balanced` value retains Knuth–Plass:
 ```
 
 Each TextUI buffer caches bounded paragraph layouts by attributed text, width,
-wrapping strategy, and display context. Identical refreshes and chapter
-revisits therefore reuse line plans without leaking source properties between
-different strings or font scales.
+wrapping strategy, resolved named-face metrics, and display context. Identical
+refreshes and chapter revisits therefore reuse line plans without leaking
+source properties between different strings or font scales. A zero
+`textui-text-layout-cache-size` disables the cache and plans directly. Theme
+and frame-font hooks invalidate all prior generations; after a direct fontset
+mutation which does not run `after-setting-font-hook`, call
+`textui-invalidate-text-layout-cache`.
 
 The Knuth–Plass implementation in `textui-kp-core.el` is adapted from Kinney
 Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp), specifically

@@ -10,6 +10,11 @@
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing the TextUI unit tests.")
 
+(defface textui-test-layout-cache-face
+  '((t (:height 1.0)))
+  "Face used to verify text layout cache invalidation."
+  :group 'textui)
+
 (define-widget 'textui-test-custom-button 'push-button
   "Custom button used to verify direct widget.el compatibility."
   :format "<%[%v%]>")
@@ -654,17 +659,91 @@
 (ert-deftest textui-greedy-wrap-preserves-cjk-kinsoku-and-properties ()
   "The low-latency text path must keep source metadata and legal CJK breaks."
   (require 'textui-kp-core)
-  (let* ((source (propertize "甲乙，丙丁戊己" 'fixture-source 'kept))
+  (let* ((source (copy-sequence "甲乙，丙丁戊己"))
          (lines
-          (cl-letf (((symbol-function 'textui-kp-core--pixel-width)
-                     (lambda (string) (string-width string))))
-            (textui-kp-core-greedy-lines source source 4))))
+          (progn
+            (dotimes (index (length source))
+              (put-text-property
+               index (1+ index) 'fixture-source index source))
+            (cl-letf (((symbol-function 'textui-kp-core--pixel-width)
+                       (lambda (string) (string-width string))))
+              (textui-kp-core-greedy-lines source source 4)))))
     (should (> (length lines) 1))
-    (should (equal (mapconcat #'substring-no-properties lines "")
+    (should (equal (replace-regexp-in-string
+                    "\u200B" ""
+                   (mapconcat #'substring-no-properties lines ""))
                    (substring-no-properties source)))
+    (should
+     (equal
+      (cl-loop for line in lines append
+               (cl-loop for index from 0 below (length line)
+                        unless (get-text-property
+                                index 'textui--synthetic-spacing line)
+                        collect (get-text-property
+                                 index 'fixture-source line)))
+      (number-sequence 0 (1- (length source)))))
     (dolist (line lines)
-      (should (eq (get-text-property 0 'fixture-source line) 'kept))
       (should-not (string-match-p "\\`[，。！？、]" line)))))
+
+(ert-deftest textui-greedy-wrap-justifies-non-final-lines ()
+  "Fast break selection must retain TextUI's justified prose contract."
+  (require 'textui-kp-core)
+  (let* ((source "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥")
+         (pixel-width (textui--text-pixel-width 8))
+         (lines (textui-kp-core-greedy-lines
+                 source source pixel-width)))
+    (should (> (length lines) 1))
+    (dolist (line (butlast lines))
+      (should (get-text-property 0 'textui--pixel-justified line))
+      (should (= (textui-kp-core--pixel-width line) pixel-width)))
+    (should-not (get-text-property
+                 0 'textui--pixel-justified (car (last lines))))))
+
+(ert-deftest textui-text-layout-cache-zero-renders-without-caching ()
+  "A zero cache size must call either planner and preserve properties."
+  (let ((textui-text-layout-cache-size 0)
+        (source (propertize "缓存关闭仍应显示正文" 'fixture-source 'kept)))
+    (dolist (strategy '(balanced greedy))
+      (with-temp-buffer
+        (textui-mode)
+        (let ((lines (textui--wrap-text source 8 strategy)))
+          (should lines)
+          (should
+           (equal (replace-regexp-in-string
+                   "[\u200B\n]" "" (mapconcat #'substring-no-properties
+                                                lines ""))
+                  (substring-no-properties source)))
+          (should (eq (get-text-property 0 'fixture-source (car lines))
+                      'kept)))))))
+
+(ert-deftest textui-text-layout-cache-invalidates-for-display-environment ()
+  "Named face, theme, and frame font changes must invalidate line plans."
+  (let ((original-height
+         (face-attribute 'textui-test-layout-cache-face :height nil t)))
+    (unwind-protect
+        (with-temp-buffer
+          (textui-mode)
+          (let ((calls 0)
+                (source
+                 (propertize "display context" 'face
+                             'textui-test-layout-cache-face)))
+            (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                       (lambda (_source attributed _pixels)
+                         (setq calls (1+ calls))
+                         (list attributed))))
+              (textui--wrap-text source 20 'greedy)
+              (set-face-attribute
+               'textui-test-layout-cache-face nil :height 2.0)
+              (textui--wrap-text source 20 'greedy)
+              (should (= calls 2))
+              (run-hook-with-args 'enable-theme-functions 'test-theme)
+              (textui--wrap-text source 20 'greedy)
+              (should (= calls 3))
+              (run-hooks 'after-setting-font-hook)
+              (textui--wrap-text source 20 'greedy)
+              (should (= calls 4)))))
+      (set-face-attribute
+       'textui-test-layout-cache-face nil :height original-height))))
 
 (ert-deftest textui-text-layout-cache-reuses-an-identical-plan ()
   "A second render of identical attributed prose must not measure it again."

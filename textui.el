@@ -30,7 +30,9 @@
 ;; `textui-async-callback', `textui-refresh', `textui-request-refresh',
 ;; `textui-refresh-region',
 ;; `textui-request-refresh-region', `textui-register-cleanup', and
-;; `textui-register-expander'.
+;; `textui-register-expander'.  Packages that mutate fontsets outside the
+;; ordinary Emacs font/theme hooks can call
+;; `textui-invalidate-text-layout-cache'.
 ;; A `:text' leaf wraps and pixel-justifies attributed text at the content
 ;; width assigned by its flex or grid parent:
 ;;
@@ -88,6 +90,20 @@ The cache is cleared as one generation when this many entries are reached.
 Set it to zero to disable text layout caching."
   :type 'integer
   :group 'textui)
+
+(defvar textui--text-layout-environment-generation 0
+  "Display-environment generation included in paragraph layout cache keys.")
+
+(defun textui-invalidate-text-layout-cache (&rest _context)
+  "Invalidate all TextUI paragraph layouts after a display change.
+Theme and frame-font hooks call this automatically.  Call it explicitly after
+direct fontset mutations that do not run `after-setting-font-hook'."
+  (setq textui--text-layout-environment-generation
+        (1+ textui--text-layout-environment-generation)))
+
+(add-hook 'enable-theme-functions #'textui-invalidate-text-layout-cache)
+(add-hook 'disable-theme-functions #'textui-invalidate-text-layout-cache)
+(add-hook 'after-setting-font-hook #'textui-invalidate-text-layout-cache)
 
 (defvar-local textui--render-function nil)
 (defvar-local textui--last-width nil)
@@ -611,12 +627,54 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
        (textui-kp-core-greedy-lines source attributed pixel-width))
       (_ (error "Unknown TextUI text wrapping strategy: %S" strategy)))))
 
+(defconst textui--text-metric-face-attributes
+  '(:family :foundry :width :height :weight :slant :box :inherit)
+  "Resolved face attributes that can change paragraph measurement.")
+
+(defun textui--face-symbols (value)
+  "Return named faces referenced recursively by face VALUE."
+  (cond
+   ((and (symbolp value) (facep value)) (list value))
+   ((consp value)
+    (cl-mapcan #'textui--face-symbols value))))
+
+(defun textui--text-referenced-faces (string)
+  "Return named faces whose resolved metrics affect STRING."
+  (let ((faces '(default)))
+    (dolist (interval (object-intervals string))
+      (let ((properties (nth 2 interval)))
+        (dolist (property '(face font-lock-face))
+          (when (plist-member properties property)
+            (setq faces
+                  (append
+                   (textui--face-symbols
+                    (plist-get properties property))
+                   faces))))))
+    (cl-delete-duplicates faces :test #'eq)))
+
+(defun textui--text-face-metric-signature (string)
+  "Return resolved named-face metrics relevant to STRING."
+  (let ((frame (selected-frame)))
+    (mapcar
+     (lambda (face)
+       (cons
+        face
+        (mapcar
+         (lambda (attribute)
+           (cons attribute
+                 (face-attribute face attribute frame 'default)))
+         textui--text-metric-face-attributes)))
+     (textui--text-referenced-faces string))))
+
 (defun textui--text-layout-context (string pixel-width strategy)
   "Return a cache key for STRING, PIXEL-WIDTH, and wrapping STRATEGY."
   (list (substring-no-properties string)
         (object-intervals string)
         pixel-width strategy
+        textui--text-layout-environment-generation
+        (textui--text-face-metric-signature string)
         (copy-tree face-remapping-alist)
+        (frame-parameter (selected-frame) 'font)
         (frame-char-width (selected-frame))
         (frame-char-height (selected-frame))))
 
@@ -628,19 +686,23 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
   "Return STRING wrapped for WIDTH cells using optional STRATEGY."
   (let ((attributed (copy-sequence string))
         (pixel-width (textui--text-pixel-width width))
+        (cache-enabled (> textui-text-layout-cache-size 0))
         cache key cached
         lines)
     (dotimes (offset (length attributed))
       (put-text-property offset (1+ offset)
                          'textui--text-source-offset offset attributed))
-    (setq cache
-          (or textui--text-layout-cache
-              (setq textui--text-layout-cache
-                    (make-hash-table :test #'equal))))
-    (setq key (textui--text-layout-context
-               string pixel-width (or strategy 'balanced))
-          cached (and (> textui-text-layout-cache-size 0)
-                      (gethash key cache 'textui--cache-miss)))
+    (when cache-enabled
+      (setq cache
+            (or textui--text-layout-cache
+                (setq textui--text-layout-cache
+                      (make-hash-table :test #'equal)))))
+    (setq key (and cache-enabled
+                   (textui--text-layout-context
+                    string pixel-width (or strategy 'balanced)))
+          cached (if cache-enabled
+                     (gethash key cache 'textui--cache-miss)
+                   'textui--cache-miss))
     (if (not (eq cached 'textui--cache-miss))
         (textui--copy-text-lines cached)
       (dolist (range (textui--text-hard-line-ranges string))
@@ -653,7 +715,7 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
                   (substring string start end)
                   (substring attributed start end)
                   pixel-width strategy)))))
-      (when (> textui-text-layout-cache-size 0)
+      (when cache-enabled
         (when (>= (hash-table-count cache) textui-text-layout-cache-size)
           (clrhash cache))
         (puthash key (textui--copy-text-lines lines) cache))
