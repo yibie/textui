@@ -2156,5 +2156,89 @@
         (should-error (textui-refresh buffer))
       (kill-buffer buffer))))
 
+(ert-deftest textui-action-refresh-captures-a-missing-snapshot ()
+  "An action without a pre-command snapshot must use its target position."
+  (let ((state 0)
+        (buffer (generate-new-buffer " *textui-missing-snapshot-test*"))
+        button)
+    (unwind-protect
+        (save-window-excursion
+          (switch-to-buffer buffer)
+          (with-current-buffer buffer
+            (textui-mode)
+            (setq-local
+             textui--last-width 30
+             textui--render-function
+             (lambda (_width)
+               (list (list :type 'push-button
+                           :value (number-to-string state)
+                           :action (lambda (&rest _)
+                                     (setq state (1+ state)))))))
+            (textui-refresh buffer)
+            (goto-char (point-max))
+            (setq button
+                  (cl-find-if
+                   (lambda (widget) (eq (car widget) 'push-button))
+                   textui--widgets))
+            (should-not textui--position-before-command))
+          (with-temp-buffer
+            (let ((this-command 'widget-button-press))
+              (widget-apply-action button)))
+          (with-current-buffer buffer
+            (should textui--pending-focus)
+            (textui--restore-focus-after-command)
+            (should (= state 1))
+            (should (equal (buffer-string) "[1]"))
+            (should (= (current-column) 3))))
+      (kill-buffer buffer))))
+
+(ert-deftest textui-action-refresh-reads-the-snapshot-from-its-own-buffer ()
+  "The focus snapshot must come from the refreshed buffer.
+
+`textui--focus-before-command' and `textui--position-before-command' are
+buffer-local.  A widget action can run while another buffer is current,
+in which case reading them without `buffer-local-value' yields the global
+nil and the refresh loses point."
+  (let ((state 0)
+        (buffer (generate-new-buffer " *textui-snapshot-test*"))
+        button
+        snapshot)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (textui-mode)
+            (setq-local
+             textui--last-width 30
+             textui--render-function
+             (lambda (_width)
+               (list (list :type 'push-button
+                           :value (number-to-string state)
+                           :action (lambda (&rest _)
+                                     (setq state (1+ state)))))))
+            (textui-refresh buffer)
+            (goto-char (point-min))
+            (textui--remember-focus)
+            ;; A missing semantic focus with a valid line/column is a
+            ;; complete snapshot, not a reason to recapture both fields.
+            (setq textui--focus-before-command nil
+                  snapshot textui--position-before-command
+                  button
+                  (cl-find-if
+                   (lambda (widget) (eq (car widget) 'push-button))
+                   textui--widgets))
+            (should (consp snapshot))
+            (goto-char (point-max)))
+          (with-temp-buffer
+            (should-not textui--position-before-command)
+            (let ((this-command 'widget-button-press))
+              (widget-apply-action button)))
+          (with-current-buffer buffer
+            (should textui--pending-focus)
+            (textui--restore-focus-after-command)
+            (should (= state 1))
+            (should (equal (buffer-string) "[1]"))
+            (should (= (current-column) (cdr snapshot)))))
+      (kill-buffer buffer))))
+
 (provide 'textui-test)
 ;;; textui-test.el ends here

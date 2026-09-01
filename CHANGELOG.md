@@ -27,6 +27,20 @@ are under [`test/performance/`](test/performance/README.md).
   environment generation. A zero cache size plans text directly, and
   `textui-invalidate-text-layout-cache` covers direct fontset mutations.
 
+### Fixed
+
+- An action-triggered refresh read `textui--focus-before-command` and
+  `textui--position-before-command` as plain variables. Both are buffer-local
+  and are written in the refreshed buffer, so a widget action running while
+  another buffer was current read the global `nil`, and the refresh reported
+  `wrong-type-argument number-or-marker-p nil` from `post-command-hook` while
+  losing point. Both are now read with `buffer-local-value` from the target
+  buffer, matching the guards beside them.
+- When an action has no pre-command snapshot, a full-frame refresh now captures
+  focus and position from the target buffer before replacing its contents.
+  Window-view capture and post-command restoration therefore receive valid
+  fallbacks instead of aborting on `nil`.
+
 ## [0.5.1] - 2026-08-11
 
 ### Documentation

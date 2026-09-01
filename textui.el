@@ -1283,8 +1283,17 @@ Keep existing widget and focus records when APPEND is non-nil."
                                   target-buffer)))
                    (let ((textui--focus-override
                           (and this-command
-                               (list textui--focus-before-command
-                                     textui--position-before-command))))
+                               ;; These are buffer-local and are written by
+                               ;; `textui--remember-focus' in the target
+                               ;; buffer.  A widget action can run while
+                               ;; another buffer is current, so read them from
+                               ;; the target buffer like the guards above.
+                               (list (buffer-local-value
+                                      'textui--focus-before-command
+                                      target-buffer)
+                                     (buffer-local-value
+                                      'textui--position-before-command
+                                      target-buffer)))))
                     (textui--reconcile target-buffer)))
                  result)))))
         (if attach
@@ -1788,11 +1797,14 @@ Registering the same function object more than once has no effect."
 
 (defun textui--commit-full-frame (buffer width rendered regions)
   "Commit a complete BUFFER frame described by WIDTH, RENDERED, and REGIONS."
-  (let* ((focus (if textui--focus-override
+  (let* ((override-position
+          (and textui--focus-override (nth 1 textui--focus-override)))
+         (use-override (consp override-position))
+         (focus (if use-override
                     (nth 0 textui--focus-override)
                   (textui--capture-focus)))
-         (position (if textui--focus-override
-                       (nth 1 textui--focus-override)
+         (position (if use-override
+                       override-position
                      (textui--capture-position)))
          (views (textui--capture-window-views buffer focus position))
          (inhibit-read-only t)
