@@ -626,10 +626,48 @@ Optional LIMITS caps each returned share."
           (if (= width 0)
               ""
             (textui--pad-right
-             (truncate-string-to-width
-              (textui--image-alt element) width nil nil "…")
+             (textui--image-alt-fragment element width)
              width))))
     (cons line (make-list (1- rows) (make-string width ?\s)))))
+
+(defun textui--image-alt-fragment (element columns)
+  "Return ELEMENT's alternative text bounded by COLUMNS and characters.
+`truncate-string-to-width' bounds display cells, but zero-width combining and
+variation characters can leave the result longer than the fixed backing row.
+The second bound keeps splicing safe while retaining text properties."
+  (let ((alternative
+         (truncate-string-to-width
+          (textui--image-alt element) columns nil nil "…")))
+    (if (> (length alternative) columns)
+        (substring alternative 0 columns)
+      alternative)))
+
+(defun textui--image-alt-carrier (alternative)
+  "Return spaces carrying ALTERNATIVE's text properties."
+  (let ((carrier
+         (string-to-multibyte (make-string (length alternative) ?\s)))
+        (position 0))
+    (while (< position (length alternative))
+      (let ((next
+             (next-property-change
+              position alternative (length alternative)))
+            (properties (text-properties-at position alternative)))
+        (when properties
+          (add-text-properties position next properties carrier))
+        (setq position next)))
+    carrier))
+
+(defun textui--splice-image-alt (line left alternative &optional metadata-only)
+  "Splice ALTERNATIVE into LINE at LEFT without changing LINE's length.
+When METADATA-ONLY is non-nil, use blank carrier characters so properties are
+available without showing alternative text outside the actual image slice."
+  (let ((content
+         (if metadata-only
+             (textui--image-alt-carrier alternative)
+           alternative)))
+    (concat (substring line 0 left)
+            content
+            (substring line (+ left (length content))))))
 
 (defun textui--render-image-spec (spec width)
   "Render image SPEC as native horizontal slices inside WIDTH."
@@ -664,26 +702,27 @@ Optional LIMITS caps each returned share."
              (left (/ (- width image-columns) 2))
              (top (/ (- rows image-rows) 2))
              (slice-height (/ 1.0 image-rows))
+             (alternative (textui--image-alt-fragment element image-columns))
              (image (create-image (plist-get element :file) nil nil :scale 1
                                   :width image-width :height image-height
                                   :ascent 'center)))
         (dotimes (row rows)
           (let ((line (string-to-multibyte (make-string width ?\s))))
+            ;; Metadata describes the complete image leaf, so its anchor is
+            ;; always carried by row zero even when vertical letterboxing puts
+            ;; the first visible slice on a later row.
+            (when (= row 0)
+              (setq line
+                    (textui--splice-image-alt
+                     line left alternative (> top 0))))
             (when (and (>= row top) (< row (+ top image-rows)))
               (let ((slice-row (- row top)))
-                (when (= slice-row 0)
-                  (let ((alternative
-                         (truncate-string-to-width
-                          (textui--image-alt element)
-                          image-columns nil nil "…")))
-                    ;; Concatenation keeps the alternative text's properties;
-                    ;; `store-substring' copies only characters and also
-                    ;; rejects non-byte characters in a unibyte target.
-                    (setq line
-                          (concat
-                           (substring line 0 left)
-                           alternative
-                           (substring line (+ left (length alternative)))))))
+                (when (and (= slice-row 0) (> top 0))
+                  ;; Keep the alternative characters under the first actual
+                  ;; slice for copy/search, but do not duplicate its metadata.
+                  (setq line
+                        (textui--splice-image-alt
+                         line left (substring-no-properties alternative))))
                 (put-text-property
                  left (+ left image-columns) 'display
                  (list (list 'slice 0.0

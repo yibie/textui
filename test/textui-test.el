@@ -6,6 +6,10 @@
 (require 'cl-lib)
 (require 'textui)
 
+(defconst textui-test--directory
+  (file-name-directory (or load-file-name buffer-file-name))
+  "Directory containing the TextUI unit tests.")
+
 (define-widget 'textui-test-custom-button 'push-button
   "Custom button used to verify direct widget.el compatibility."
   :format "<%[%v%]>")
@@ -495,6 +499,71 @@
         (should (eq (get-text-property
                      (cdr anchor-position) 'textui-test-anchor
                      (car anchor-position))
+                    'source))))))
+
+(ert-deftest textui-native-letterboxed-image-anchors-the-first-leaf-row ()
+  (let* ((fixture
+         (expand-file-name
+           "fixtures/small-letterbox.svg"
+           textui-test--directory))
+         (alt (propertize "small" 'textui-test-anchor 'source)))
+    (cl-letf (((symbol-function 'display-graphic-p)
+               (lambda (&optional _display) t))
+              ((symbol-function 'frame-char-width)
+               (lambda (&optional _frame) 10))
+              ((symbol-function 'frame-char-height)
+               (lambda (&optional _frame) 20))
+              ((symbol-function 'create-image)
+               (lambda (file &optional _type _data-p &rest properties)
+                 (cons 'image (append (list :file file) properties))))
+              ((symbol-function 'image-size)
+               (lambda (&rest _arguments) '(20 . 20))))
+      (let* ((rendered
+              (textui--render-frame
+               (list (list :type :image :file fixture :rows 4 :alt alt))
+               10))
+             (lines (split-string rendered "\n")))
+        (should (= (length lines) 4))
+        ;; The image is one row high and vertically letterboxed.  Metadata
+        ;; belongs to the leaf range, whose first row is row zero, rather than
+        ;; to the first visible slice at row one.
+        (should
+         (text-property-any 0 (length (nth 0 lines))
+                            'textui-test-anchor 'source (nth 0 lines)))
+        (should-not
+         (text-property-any 0 (length (nth 1 lines))
+                            'textui-test-anchor 'source (nth 1 lines)))
+        (should
+         (cl-loop for position from 0 below (length (nth 1 lines))
+                  thereis (get-text-property
+                           position 'display (nth 1 lines))))))))
+
+(ert-deftest textui-native-image-alt-splice-bounds-unicode-character-count ()
+  (cl-letf (((symbol-function 'display-graphic-p)
+             (lambda (&optional _display) t))
+            ((symbol-function 'file-readable-p)
+             (lambda (_file) t))
+            ((symbol-function 'frame-char-width)
+             (lambda (&optional _frame) 10))
+            ((symbol-function 'frame-char-height)
+             (lambda (&optional _frame) 20))
+            ((symbol-function 'create-image)
+             (lambda (file &optional _type _data-p &rest properties)
+               (cons 'image (append (list :file file) properties))))
+            ((symbol-function 'image-size)
+             (lambda (&rest _arguments) '(100 . 20))))
+    (dolist (alt (list (concat "a" (make-string 20 #x0301))
+                       (concat "a" (make-string 20 #xfe0f))))
+      (should (= (string-width alt) 1))
+      (let* ((source (propertize alt 'textui-test-anchor 'source))
+             (rendered
+              (textui--render-frame
+               (list (list :type :image :file "image.svg"
+                           :rows 1 :alt source))
+               10))
+             (line (car (split-string rendered "\n"))))
+        (should (= (length line) 10))
+        (should (eq (get-text-property 0 'textui-test-anchor line)
                     'source))))))
 
 (ert-deftest textui-image-leaf-falls-back-when-file-is-unreadable ()
