@@ -638,6 +638,18 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
    ((consp value)
     (cl-mapcan #'textui--face-symbols value))))
 
+(defun textui--face-remap-symbols (remappings)
+  "Return named faces referenced by face REMAPPINGS.
+REMAPPINGS is a `face-remapping-alist' value whose entries may use
+either proper-list or dotted-pair syntax."
+  (let (faces)
+    (dolist (entry remappings faces)
+      (when (consp entry)
+        (setq faces
+              (append faces
+                      (textui--face-symbols (car entry))
+                      (textui--face-symbols (cdr entry))))))))
+
 (defun textui--text-referenced-faces (string)
   "Return named faces whose resolved metrics affect STRING."
   (let ((faces '(default)))
@@ -658,7 +670,7 @@ STRATEGY is `balanced' by default or the low-latency `greedy' path."
         (faces
          (cl-delete-duplicates
           (append (textui--text-referenced-faces string)
-                  (textui--face-symbols face-remapping-alist))
+                  (textui--face-remap-symbols face-remapping-alist))
           :test #'eq)))
     (mapcar
      (lambda (face)
