@@ -16,6 +16,15 @@ These are medians from fixed fixtures on the release machine, not
 cross-machine guarantees. The retained diagnostic programs and instructions
 are under [`test/performance/`](test/performance/README.md).
 
+## [0.7.0] - 2026-09-04
+
+### Added
+
+- Add the optional `textui-keyed-region` deep module for incrementally
+  reconciling ordered, stable items inside one bounded complete-line column.
+  It preserves unchanged rendered items and widgets, while width changes and
+  unrelated refreshes safely invalidate the optimization. See ADR 0037.
+
 ## [0.6.0] - 2026-09-01
 
 ### Added

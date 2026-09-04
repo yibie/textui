@@ -207,6 +207,14 @@ an empty continuation line. A shared buffer therefore has one conservative
 layout.
 _Avoid_: Current window width, selected window width
 
+**Text layout cache key**:
+An optional caller-owned identity for one complete attributed `:text` source.
+It avoids rebuilding a content-derived cache key for stable document blocks;
+the element's allocated content width and display environment remain separate
+parts of the layout key.  The owner must change the identity with any source or
+metric-property revision.  Outer available width is not text layout width.
+_Avoid_: Buffer identity, chapter identity without a content revision
+
 **Event handler**:
 A callback resolved as a native widget's effective `:action`, whether supplied
 by the element or inherited from its widget.el type. TextUI preserves widget.el's

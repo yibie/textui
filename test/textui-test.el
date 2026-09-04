@@ -763,6 +763,47 @@
                        0 'fixture-source (car second))
                       'same)))))))
 
+(ert-deftest textui-text-layout-cache-keys-blocks-by-effective-width ()
+  "Outer width changes must not re-plan a fixed-width keyed text block."
+  (require 'textui-kp-core)
+  (with-temp-buffer
+    (textui-mode)
+    (let ((calls 0)
+          (element
+           '(:type :flex :direction :row :gap 0
+             :children
+             ((:type :text :value "stable attributed prose"
+               :cache-key (chapter-1 paragraph-3 revision-1)
+               :wrap greedy
+               :layout (:width 20 :min-width 20))))))
+      (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                 (lambda (_source attributed _pixels)
+                   (setq calls (1+ calls))
+                   (list attributed))))
+        (textui--render-frame (list element) 40)
+        (textui--render-frame (list element) 30)
+        (should (= calls 1))))))
+
+(ert-deftest textui-text-layout-cache-reuses-keyed-block-at-recurring-width ()
+  "A keyed block keeps independent plans for widths that recur."
+  (require 'textui-kp-core)
+  (with-temp-buffer
+    (textui-mode)
+    (let ((calls 0)
+          (source (propertize "keyed source properties" 'fixture-source 'kept)))
+      (cl-letf (((symbol-function 'textui-kp-core-greedy-lines)
+                 (lambda (_source attributed _pixels)
+                   (setq calls (1+ calls))
+                   (list attributed))))
+        (let ((wide (textui--wrap-text source 20 'greedy 'block-7))
+              (_narrow (textui--wrap-text source 10 'greedy 'block-7))
+              (wide-again (textui--wrap-text source 20 'greedy 'block-7)))
+          (should (= calls 2))
+          (should-not (eq (car wide) (car wide-again)))
+          (should (eq (get-text-property
+                       0 'fixture-source (car wide-again))
+                      'kept)))))))
+
 (ert-deftest textui-text-layout-cache-separates-display-contexts ()
   "Face remapping changes must not reuse a stale text layout."
   (with-temp-buffer

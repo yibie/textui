@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: chenyibin
-;; Version: 0.6.0
+;; Version: 0.7.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, widgets
 
@@ -33,6 +33,8 @@
 ;; `textui-register-expander'.  Packages that mutate fontsets outside the
 ;; ordinary Emacs font/theme hooks can call
 ;; `textui-invalidate-text-layout-cache'.
+;; The optional `textui-keyed-region' module incrementally reconciles costly
+;; ordered items inside one bounded complete-line refresh region.
 ;; A `:text' leaf wraps and pixel-justifies attributed text at the content
 ;; width assigned by its flex or grid parent:
 ;;
@@ -258,7 +260,7 @@ PROPERTIES lists every accepted property."
   "Validate the width-aware TextUI text ELEMENT."
   (let ((cursor element))
     (while cursor
-      (unless (memq (car cursor) '(:type :value :wrap :layout))
+      (unless (memq (car cursor) '(:type :value :wrap :cache-key :layout))
         (error "Unknown :text property: %S" (car cursor)))
       (setq cursor (cddr cursor))))
   (unless (stringp (plist-get element :value))
@@ -683,13 +685,17 @@ either proper-list or dotted-pair syntax."
          textui--text-metric-face-attributes)))
      faces)))
 
-(defun textui--text-layout-context (string pixel-width strategy)
-  "Return a cache key for STRING, PIXEL-WIDTH, and wrapping STRATEGY."
-  (list (substring-no-properties string)
-        (object-intervals string)
+(defun textui--text-layout-context (string pixel-width strategy &optional block-key)
+  "Return STRING's layout key at PIXEL-WIDTH using STRATEGY.
+When BLOCK-KEY is non-nil, it identifies the complete attributed source.  Its
+owner must change it whenever the text or any metric-affecting property changes."
+  (list (if block-key
+            (list 'block block-key)
+          (list 'source (substring-no-properties string)
+                (object-intervals string)))
         pixel-width strategy
         textui--text-layout-environment-generation
-        (textui--text-face-metric-signature string)
+        (unless block-key (textui--text-face-metric-signature string))
         (copy-tree face-remapping-alist)
         (frame-parameter (selected-frame) 'font)
         (frame-char-width (selected-frame))
@@ -699,8 +705,11 @@ either proper-list or dotted-pair syntax."
   "Return independent string copies of LINES."
   (mapcar #'copy-sequence lines))
 
-(defun textui--wrap-text (string width &optional strategy)
-  "Return STRING wrapped for WIDTH cells using optional STRATEGY."
+(defun textui--wrap-text (string width &optional strategy block-key)
+  "Return STRING wrapped for WIDTH cells using STRATEGY and BLOCK-KEY.
+BLOCK-KEY, when non-nil, is a caller-owned identity for the complete attributed
+source.  The effective WIDTH remains part of the key, so recurring allocations
+reuse their own plans independently of the outer container width."
   (let ((attributed (copy-sequence string))
         (pixel-width (textui--text-pixel-width width))
         (cache-enabled (> textui-text-layout-cache-size 0))
@@ -716,7 +725,7 @@ either proper-list or dotted-pair syntax."
                       (make-hash-table :test #'equal)))))
     (setq key (and cache-enabled
                    (textui--text-layout-context
-                    string pixel-width (or strategy 'balanced)))
+                    string pixel-width (or strategy 'balanced) block-key))
           cached (if cache-enabled
                      (gethash key cache 'textui--cache-miss)
                    'textui--cache-miss))
@@ -745,7 +754,8 @@ either proper-list or dotted-pair syntax."
           (textui--wrap-text
            (plist-get (plist-get spec :element) :value)
            (max 1 width)
-           (plist-get (plist-get spec :element) :wrap))))
+           (plist-get (plist-get spec :element) :wrap)
+           (plist-get (plist-get spec :element) :cache-key))))
     (dolist (line lines lines)
       (when (> (length line) 0)
         (put-text-property 0 (length line)

@@ -70,7 +70,7 @@ and [Lazygit-style panels](docs/media/textui-lazygit.gif).
 
 ## Releases
 
-The current release is 0.6.0. See the [changelog](CHANGELOG.md) for the complete
+The current release is 0.7.0. See the [changelog](CHANGELOG.md) for the complete
 version history. The measured refresh improvements and their fixture scope are
 summarized in [Performance history](CHANGELOG.md#performance-history); runnable
 diagnostics remain under
@@ -284,6 +284,7 @@ sequence before applying the same line justification:
 ```elisp
 (:type :text
  :value long-article
+ :cache-key (chapter-4 paragraph-12 revision-2)
  :wrap greedy
  :layout (:min-width 24 :grow 1))
 ```
@@ -296,6 +297,16 @@ source properties between different strings or font scales. A zero
 and frame-font hooks invalidate all prior generations; after a direct fontset
 mutation which does not run `after-setting-font-hook`, call
 `textui-invalidate-text-layout-cache`.
+
+For recurring document blocks, optional `:cache-key` replaces the attributed
+text scan in the cache lookup. The key identifies the complete attributed
+source, so change it when the text or a metric-affecting property changes.
+TextUI still keys each plan by the effective width allocated to the `:text`
+leaf, not by the outer window or container width. Thus resizing surrounding
+panels does not re-break a fixed-width reading column, and returning to an
+earlier allocated width reuses that width's plan. Cached lines are copied on
+every use, preserving the source properties and mutation isolation of unkeyed
+text.
 
 The Knuth–Plass implementation in `textui-kp-core.el` is adapted from Kinney
 Zhang's [`emacs-kp`](https://github.com/Kinneyzhang/emacs-kp), specifically
@@ -417,6 +428,7 @@ choose the smallest refresh that matches the change.
 | External data changed across the frame                      | `textui-request-refresh`                                |
 | A complete-line column must change immediately              | `textui-refresh-region`                                 |
 | Frequent external updates to one complete-line column       | `textui-request-refresh-region`                         |
+| A costly bounded column retains stable ordered items        | `textui-reconcile-keyed-region`                         |
 
 ### Reconciled or full refresh
 
@@ -522,6 +534,35 @@ when surrounding layout or window width may have changed.
 When a widget `:action` calls `textui-refresh-region` itself, TextUI sees that
 the buffer has already changed and does not follow it with another automatic
 refresh.
+
+#### Incremental keyed region
+
+If profiling shows that the children of a bounded region are individually
+expensive to lay out and adjacent views overlap, load the optional module and
+submit the complete desired window with stable domain keys:
+
+```elisp
+(require 'textui-keyed-region)
+
+(textui-reconcile-keyed-region
+ buffer 'rows
+ (lambda (_content-width)
+   (mapcar (lambda (row)
+             (list (row-id row) (render-row-element row)))
+           visible-rows)))
+```
+
+The producer returns ordered, unique `(KEY ELEMENT)` entries. TextUI retains
+unchanged entries in relative order and renders only entering or changed ones.
+The target must be a complete-line column Flex refresh region without padding
+or a border; its `:gap` is preserved. Keep the submitted window bounded: the
+comparison favors rendering work over diff complexity but is quadratic in the
+number of entries.
+
+Keys are local to the named region. They do not add identity, lifecycle, or
+reactive state to the general element tree. A full refresh or width change
+invalidates the optimization and the next keyed reconcile safely renders the
+whole desired window. See ADR 0037 for the boundary of this opt-in module.
 
 The same explicit path also works for external data when the caller already
 knows the complete-line region that owns the update. If no `textui-state`
@@ -650,6 +691,7 @@ rule for extracting general capabilities from prototypes is recorded in
 | `(textui-refresh BUFFER)`                                    | Rebuild the complete frame synchronously                |
 | `(textui-refresh-region BUFFER ID PRODUCER)`                 | Replace one named complete-line column immediately      |
 | `(textui-request-refresh-region BUFFER ID PRODUCER)`         | Coalesce and defer external updates to one named column |
+| `(textui-reconcile-keyed-region BUFFER ID PRODUCER)`         | Reconcile stable items in one bounded named column      |
 | `(textui-register-cleanup BUFFER FUNCTION)`                  | Run a resource cleanup when the buffer is killed        |
 | `(textui-register-expander TYPE FUNCTION)`                   | Register or replace a package-owned DSL expander        |
 
@@ -658,6 +700,7 @@ rule for extracting general capabilities from prototypes is recorded in
 ```sh
 emacs -Q --batch -L . -L examples -L test \
   -l test/textui-test.el \
+  -l test/textui-keyed-region-test.el \
   -l test/textui-grid-gallery-test.el \
   -l test/textui-widget-compatibility-test.el \
   -l test/textui-tui-app-test.el \
