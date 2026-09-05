@@ -16,6 +16,15 @@ These are medians from fixed fixtures on the release machine, not
 cross-machine guarantees. The retained diagnostic programs and instructions
 are under [`test/performance/`](test/performance/README.md).
 
+## [0.7.1] - 2026-09-05
+
+### Fixed
+
+- Preserve a complete-line refresh region's ownership when an outer layout
+  box pads that child to the width of a wider sibling. This prevents image
+  pixel rounding and similar one-cell width differences from making a valid
+  refresh region fail the complete-line invariant.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added

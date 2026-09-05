@@ -1593,6 +1593,21 @@
           (should (equal (buffer-string) "old frame")))
       (kill-buffer buffer))))
 
+(ert-deftest textui-parent-padding-preserves-complete-line-refresh-owner ()
+  (let* ((owned (propertize "x" 'textui--refresh-id 'chapter))
+         (rendered
+          (mapconcat
+           #'identity
+           (textui--render-layout-box
+            '(:type :flex :direction :column)
+            (list owned "xx") 1 nil)
+           "\n")))
+    (should (equal (substring-no-properties rendered) "x \nxx"))
+    (should (eq (get-text-property 1 'textui--refresh-id rendered)
+                'chapter))
+    (should (equal (textui--refresh-region-span rendered 'chapter)
+                   '(0 . 3)))))
+
 (ert-deftest textui-action-error-does-not-refresh ()
   (let ((renders 0)
         (buffer (generate-new-buffer " *textui-action-error-test*")))

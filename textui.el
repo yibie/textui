@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: chenyibin
-;; Version: 0.7.0
+;; Version: 0.7.1
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, widgets
 
@@ -586,7 +586,22 @@ Optional LIMITS caps each returned share."
   "Pad STRING with spaces to at least display WIDTH."
   (let ((missing (- width (textui--rendered-string-width string))))
     (if (> missing 0)
-        (concat string (make-string missing ?\s))
+        (let* ((padding (make-string missing ?\s))
+               (refresh-id
+                (and (> (length string) 0)
+                     (get-text-property
+                      0 'textui--refresh-id string))))
+          ;; A complete-line refresh child can be widened later by an outer
+          ;; layout box.  Keep that layout-owned padding inside the same
+          ;; region; content/source properties deliberately remain on STRING.
+          (when (and refresh-id
+                     (not (text-property-not-all
+                           0 (length string)
+                           'textui--refresh-id refresh-id string)))
+            (put-text-property
+             0 (length padding)
+             'textui--refresh-id refresh-id padding))
+          (concat string padding))
       string)))
 
 (defun textui--block-width (lines)
