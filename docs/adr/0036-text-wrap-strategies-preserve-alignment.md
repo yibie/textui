@@ -22,10 +22,11 @@ an empty-frame mode.
 - `greedy` takes the furthest legal break in one linear pass.
 
 Both strategies use TextUI's common tokenization, pixel measurement, CJK
-kinsoku rules, attributed substrings, and display-only glue allocator. Both
-pixel-justify every feasible non-final line; the final line remains naturally
-ragged. A caller requesting ragged alignment needs a separate future alignment
-capability and evidence, not an overloaded break-strategy value.
+kinsoku rules, attributed substrings, and display-only glue allocator. With the
+default `:align justify`, both pixel-justify every feasible non-final line and
+leave the final line naturally ragged. Callers select ragged or centered layout
+through the separate `:align` capability recorded in ADR 0038, not by
+overloading the break-strategy value.
 
 The paragraph cache is buffer-local and bounded. Its key includes attributed
 text, allocated pixel width, break strategy, face remapping, resolved metrics

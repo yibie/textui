@@ -289,10 +289,22 @@ sequence before applying the same line justification:
  :layout (:min-width 24 :grow 1))
 ```
 
+Wrapping and alignment are independent. `:align` accepts `justify` (the
+default), `left`, `center`, or `right`. Ragged alignments keep natural line
+widths; center and right alignment add display-only pixel spacing before each
+rendered line, without inserting source spaces or shifting source offsets:
+
+```elisp
+(:type :text
+ :value "A centered publisher title"
+ :wrap greedy
+ :align center)
+```
+
 Each TextUI buffer caches bounded paragraph layouts by attributed text, width,
-wrapping strategy, resolved named-face metrics, and display context. Identical
-refreshes and chapter revisits therefore reuse line plans without leaking
-source properties between different strings or font scales. A zero
+wrapping strategy, alignment, resolved named-face metrics, and display context.
+Identical refreshes and chapter revisits therefore reuse line plans without
+leaking source properties between different strings or font scales. A zero
 `textui-text-layout-cache-size` disables the cache and plans directly. Theme
 and frame-font hooks invalidate all prior generations; after a direct fontset
 mutation which does not run `after-setting-font-hook`, call

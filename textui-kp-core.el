@@ -889,6 +889,29 @@ LAST-LINE keeps its natural ragged-right spacing."
             lines)
       (setq index (1+ index)))))
 
+(defun textui-kp-core-ragged-lines
+    (source attributed line-pixel &optional strategy)
+  "Break SOURCE and return natural ATTRIBUTED lines within LINE-PIXEL.
+STRATEGY is `balanced' by default or `greedy'.  Unlike the justified entry
+points, this function preserves each selected line's natural spacing."
+  (let* ((ranges
+          (pcase (or strategy 'balanced)
+            ('balanced (textui-kp-core-break-lines source line-pixel))
+            ('greedy (textui-kp-core--greedy-ranges source line-pixel))
+            (_ (error "Unknown TextUI text wrapping strategy: %S" strategy))))
+         (lines
+          (mapcar (lambda (range)
+                    (substring attributed (car range) (cdr range)))
+                  ranges)))
+    (if (seq-some
+         (lambda (line)
+           (> (textui-kp-core--pixel-width line) line-pixel))
+         lines)
+        (mapcar (lambda (range)
+                  (substring attributed (car range) (cdr range)))
+                (textui-kp-core--ragged-ranges source line-pixel))
+      lines)))
+
 (defun textui-kp-core-greedy-lines (source attributed line-pixel)
   "Greedily break SOURCE and justify matching ATTRIBUTED text.
 This low-latency path preserves source properties and the core CJK

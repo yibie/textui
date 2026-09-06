@@ -421,7 +421,28 @@
   (should-error (textui--render-frame '((:type :text :value 42)) 20))
   (should-error
    (textui--render-frame
-    '((:type :text :value "text" :unknown t)) 20)))
+    '((:type :text :value "text" :unknown t)) 20))
+  (should-error
+   (textui--render-frame
+    '((:type :text :value "text" :align middle)) 20)))
+
+(ert-deftest textui-text-leaf-centers-ragged-lines-without-source-padding ()
+  (let* ((rendered
+          (textui--render-frame
+           '((:type :text :value "Centered title" :wrap greedy
+              :align center))
+           30))
+         (prefix (get-text-property 0 'display rendered)))
+    (should (equal (replace-regexp-in-string
+                    "\u200B" ""
+                    (string-trim-right
+                     (substring-no-properties rendered)))
+                   "Centered title"))
+    (should (eq (get-text-property 0 'textui--synthetic-spacing rendered) t))
+    (should (equal (car prefix) 'space))
+    (should (> (car (plist-get (cdr prefix) :width)) 0))
+    (should-not (get-text-property 0 'textui--text-source-offset rendered))
+    (should (= (get-text-property 1 'textui--text-source-offset rendered) 0))))
 
 (ert-deftest textui-image-leaf-validates-its-public-shape ()
   (dolist (frame

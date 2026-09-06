@@ -3,6 +3,14 @@
 This file records user-visible changes to TextUI. Dates use the release tag's
 calendar date.
 
+## Unreleased
+
+### Added
+
+- Add orthogonal `:text :align` values `justify`, `left`, `center`, and `right`.
+  Center and right alignment use display-only pixel spacing and preserve source
+  characters and source-offset properties. See ADR 0038.
+
 ## Performance history
 
 | Release | Fixture | Before | After | Change |

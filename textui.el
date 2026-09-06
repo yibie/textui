@@ -41,7 +41,9 @@
 ;;   (:type :text :value "A long paragraph"
 ;;    :layout (:width 40 :min-width 16 :grow 1))
 ;; Set `:wrap' to `greedy' for a kinsoku-aware low-latency path; the default
-;; `balanced' strategy uses Knuth--Plass justification.
+;; `balanced' strategy uses Knuth--Plass justification.  Set `:align' to
+;; `left', `center', or `right' for naturally spaced aligned lines; the
+;; default `justify' preserves justified non-final lines.
 ;;
 ;; A `:image' leaf fits a native image into an explicit number of rows:
 ;;
@@ -85,6 +87,8 @@
                   "textui-kp-core" (source attributed line-pixel))
 (declare-function textui-kp-core-greedy-lines
                   "textui-kp-core" (source attributed line-pixel))
+(declare-function textui-kp-core-ragged-lines
+                  "textui-kp-core" (source attributed line-pixel &optional strategy))
 
 (defcustom textui-text-layout-cache-size 2048
   "Maximum paragraph layouts retained by each TextUI buffer.
@@ -260,7 +264,8 @@ PROPERTIES lists every accepted property."
   "Validate the width-aware TextUI text ELEMENT."
   (let ((cursor element))
     (while cursor
-      (unless (memq (car cursor) '(:type :value :wrap :cache-key :layout))
+      (unless (memq (car cursor)
+                    '(:type :value :wrap :align :cache-key :layout))
         (error "Unknown :text property: %S" (car cursor)))
       (setq cursor (cddr cursor))))
   (unless (stringp (plist-get element :value))
@@ -269,6 +274,11 @@ PROPERTIES lists every accepted property."
              (not (memq (plist-get element :wrap) '(balanced greedy))))
     (error ":text :wrap must be balanced or greedy: %S"
            (plist-get element :wrap)))
+  (when (and (textui--plist-member-p element :align)
+             (not (memq (plist-get element :align)
+                        '(justify left center right))))
+    (error ":text :align must be justify, left, center, or right: %S"
+           (plist-get element :align)))
   (textui--validate-layout-options element nil))
 
 (defun textui--validate-image (element)
@@ -630,19 +640,51 @@ Optional LIMITS caps each returned share."
     (push (cons start (length string)) ranges)
     (nreverse ranges)))
 
+(defun textui--text-alignment-prefix (line pixel-width alignment)
+  "Return display-only prefix aligning LINE within PIXEL-WIDTH."
+  (let* ((remaining
+          (max 0 (- pixel-width (string-pixel-width line))))
+         (pixels
+          (pcase alignment
+            ('center (/ remaining 2))
+            ('right remaining)
+            (_ 0))))
+    (if (> pixels 0)
+        (propertize "\u200B"
+                    'display `(space :width (,pixels))
+                    'textui--synthetic-spacing t)
+      "")))
+
 (defun textui--text-plan-lines
-    (source attributed pixel-width &optional strategy)
+    (source attributed pixel-width &optional strategy alignment)
   "Break SOURCE and return matching substrings from ATTRIBUTED.
-STRATEGY is `balanced' by default or the low-latency `greedy' path."
+STRATEGY is `balanced' by default or the low-latency `greedy' path.
+ALIGNMENT defaults to `justify'; other values retain natural line spacing."
   (if (string-empty-p source)
       (list "")
     (require 'textui-kp-core)
-    (pcase (or strategy 'balanced)
-      ('balanced
-       (textui-kp-core-justify-lines source attributed pixel-width))
-      ('greedy
-       (textui-kp-core-greedy-lines source attributed pixel-width))
-      (_ (error "Unknown TextUI text wrapping strategy: %S" strategy)))))
+    (let* ((alignment (or alignment 'justify))
+           (lines
+            (if (eq alignment 'justify)
+                (pcase (or strategy 'balanced)
+                  ('balanced
+                   (textui-kp-core-justify-lines
+                    source attributed pixel-width))
+                  ('greedy
+                   (textui-kp-core-greedy-lines
+                    source attributed pixel-width))
+                  (_ (error "Unknown TextUI text wrapping strategy: %S"
+                            strategy)))
+              (textui-kp-core-ragged-lines
+               source attributed pixel-width strategy))))
+      (if (memq alignment '(center right))
+          (mapcar
+           (lambda (line)
+             (concat
+              (textui--text-alignment-prefix line pixel-width alignment)
+              line))
+           lines)
+        lines))))
 
 (defconst textui--text-metric-face-attributes
   '(:family :foundry :width :height :weight :slant :box :inherit)
@@ -700,7 +742,8 @@ either proper-list or dotted-pair syntax."
          textui--text-metric-face-attributes)))
      faces)))
 
-(defun textui--text-layout-context (string pixel-width strategy &optional block-key)
+(defun textui--text-layout-context
+    (string pixel-width strategy &optional block-key alignment)
   "Return STRING's layout key at PIXEL-WIDTH using STRATEGY.
 When BLOCK-KEY is non-nil, it identifies the complete attributed source.  Its
 owner must change it whenever the text or any metric-affecting property changes."
@@ -708,7 +751,7 @@ owner must change it whenever the text or any metric-affecting property changes.
             (list 'block block-key)
           (list 'source (substring-no-properties string)
                 (object-intervals string)))
-        pixel-width strategy
+        pixel-width strategy (or alignment 'justify)
         textui--text-layout-environment-generation
         (unless block-key (textui--text-face-metric-signature string))
         (copy-tree face-remapping-alist)
@@ -720,7 +763,8 @@ owner must change it whenever the text or any metric-affecting property changes.
   "Return independent string copies of LINES."
   (mapcar #'copy-sequence lines))
 
-(defun textui--wrap-text (string width &optional strategy block-key)
+(defun textui--wrap-text
+    (string width &optional strategy block-key alignment)
   "Return STRING wrapped for WIDTH cells using STRATEGY and BLOCK-KEY.
 BLOCK-KEY, when non-nil, is a caller-owned identity for the complete attributed
 source.  The effective WIDTH remains part of the key, so recurring allocations
@@ -740,7 +784,8 @@ reuse their own plans independently of the outer container width."
                       (make-hash-table :test #'equal)))))
     (setq key (and cache-enabled
                    (textui--text-layout-context
-                    string pixel-width (or strategy 'balanced) block-key))
+                    string pixel-width (or strategy 'balanced) block-key
+                    alignment))
           cached (if cache-enabled
                      (gethash key cache 'textui--cache-miss)
                    'textui--cache-miss))
@@ -755,7 +800,7 @@ reuse their own plans independently of the outer container width."
                  (textui--text-plan-lines
                   (substring string start end)
                   (substring attributed start end)
-                  pixel-width strategy)))))
+                  pixel-width strategy alignment)))))
       (when cache-enabled
         (when (>= (hash-table-count cache) textui-text-layout-cache-size)
           (clrhash cache))
@@ -770,7 +815,8 @@ reuse their own plans independently of the outer container width."
            (plist-get (plist-get spec :element) :value)
            (max 1 width)
            (plist-get (plist-get spec :element) :wrap)
-           (plist-get (plist-get spec :element) :cache-key))))
+           (plist-get (plist-get spec :element) :cache-key)
+           (plist-get (plist-get spec :element) :align))))
     (dolist (line lines lines)
       (when (> (length line) 0)
         (put-text-property 0 (length line)
