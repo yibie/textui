@@ -5,11 +5,35 @@ calendar date.
 
 ## Unreleased
 
+## [0.8.0] - 2026-09-06
+
 ### Added
 
 - Add orthogonal `:text :align` values `justify`, `left`, `center`, and `right`.
   Center and right alignment use display-only pixel spacing and preserve source
   characters and source-offset properties. See ADR 0038.
+- Add `textui-layout-widget`, a standalone API that asks a package-owned
+  `widget.el` block widget to lay itself out at an allocated character width.
+- Add `textui-attach-widget`, a standalone API that attaches an already
+  rendered block widget to existing text in any buffer without requiring
+  `textui-mode`.
+- Add the inherited `:textui-layout` block-widget protocol. Its callback
+  receives the converted widget and allocated width and returns non-empty
+  multiline text; `:textui-attach` then adopts that text without rewriting it.
+
+### Changed
+
+- Permit width-aware block widgets as top-level TextUI frame elements while
+  retaining the existing single-line contract for ordinary native widgets.
+- Keep block widgets explicitly top-level-only. Flex and grid children still
+  require composable line blocks rather than embedded multiline native text.
+
+### Fixed
+
+- Allocate native location IDs consistently across ordinary and block widgets,
+  beginning at zero and preserving source order.
+- Validate standalone attachment bounds, marker ownership, deletion lifecycle,
+  and plain-text preservation before accepting a block widget.
 
 ## Performance history
 
@@ -192,6 +216,10 @@ are under [`test/performance/`](test/performance/README.md).
 - In the btop 50-process fixture, routed detail updates improved from a median
   of 11.65 ms to 5.67 ms while retaining native `widget.el` push-button rows.
 
+[0.8.0]: https://github.com/yibie/textui/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/yibie/textui/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/yibie/textui/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/yibie/textui/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/yibie/textui/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yibie/textui/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/yibie/textui/compare/v0.3.0...v0.4.0
