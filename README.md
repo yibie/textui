@@ -706,6 +706,28 @@ rule for extracting general capabilities from prototypes is recorded in
 | `(textui-reconcile-keyed-region BUFFER ID PRODUCER)`         | Reconcile stable items in one bounded named column      |
 | `(textui-register-cleanup BUFFER FUNCTION)`                  | Run a resource cleanup when the buffer is killed        |
 | `(textui-register-expander TYPE FUNCTION)`                   | Register or replace a package-owned DSL expander        |
+| `(textui-layout-widget WIDGET WIDTH)`                        | Render a standalone block widget at an allocated width  |
+| `(textui-attach-widget WIDGET FROM TO)`                      | Attach a standalone block widget to existing text       |
+
+### Standalone block widgets
+
+A package can define a width-aware, multiline `widget.el` widget and embed it
+in any buffer; the buffer does not need to enable `textui-mode`.  The widget
+protocol has two properties:
+
+- `:textui-layout` is a function of `(WIDGET WIDTH)` and returns a non-empty
+  multiline string.  `WIDTH` is the allocated width in columns.
+- `:textui-attach` is a function of `(WIDGET FROM TO)`.  It attaches overlays
+  and other widget state to text already inserted between `FROM` and `TO`.  It
+  must leave that plain text unchanged, store exact same-buffer marker bounds
+  in `:from` and `:to`, and store a function in `:delete`.
+
+Call `textui-layout-widget` before inserting the text, then call
+`textui-attach-widget` on the inserted region.  Both functions validate the
+protocol.  TextUI frames also recognize such a widget as a block, but only as
+a top-level frame element.  Embedding block widgets inside flex or grid is not
+part of this API.  Ordinary native widgets keep the existing single-line
+measurement and materialization contract.
 
 ## Run the tests
 

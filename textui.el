@@ -4,7 +4,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;; Author: chenyibin
-;; Version: 0.7.1
+;; Version: 0.8.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, widgets
 
@@ -30,7 +30,9 @@
 ;; `textui-async-callback', `textui-refresh', `textui-request-refresh',
 ;; `textui-refresh-region',
 ;; `textui-request-refresh-region', `textui-register-cleanup', and
-;; `textui-register-expander'.  Packages that mutate fontsets outside the
+;; `textui-register-expander'.  Standalone widget integrations can use
+;; `textui-layout-widget' and `textui-attach-widget' without enabling
+;; `textui-mode'.  Packages that mutate fontsets outside the
 ;; ordinary Emacs font/theme hooks can call
 ;; `textui-invalidate-text-layout-cache'.
 ;; The optional `textui-keyed-region' module incrementally reconciles costly
@@ -67,6 +69,12 @@
 
 (defvar textui--next-layout-id nil
   "Dynamically bound layout-element location counter.")
+
+(defun textui--allocate-location-id ()
+  "Return the next native location ID, or nil when collection is disabled."
+  (when (integerp textui--next-location-id)
+    (prog1 textui--next-location-id
+      (setq textui--next-location-id (1+ textui--next-location-id)))))
 
 (defvar textui--collect-refresh-regions nil
   "Non-nil while rendered refresh regions should be recorded.")
@@ -373,17 +381,72 @@ Re-registering TYPE replaces the previous function.  Return TYPE."
       (setq cursor (cddr cursor)))
     result))
 
+;;;###autoload
+(defun textui-layout-widget (widget width)
+  "Lay out block WIDGET at WIDTH columns and return its rendered text.
+WIDGET must define a `:textui-layout' function accepting WIDGET and WIDTH.
+The function must return a non-empty multiline string.  This standalone API
+does not require `textui-mode'; callers may insert the result into any buffer.
+Block widgets are only supported as top-level TextUI frame elements."
+  (unless (and (integerp width) (>= width 0))
+    (error "Widget layout width must be a non-negative integer: %S" width))
+  (let ((layout (widget-get widget :textui-layout)))
+    (unless (functionp layout)
+      (error "Widget :textui-layout is not a function: %S" layout))
+    (let ((text (funcall layout widget width)))
+      (unless (and (stringp text)
+                   (> (length text) 0)
+                   (string-match-p "\n" text))
+        (error "Widget :textui-layout must return non-empty multiline text: %S"
+               text))
+      text)))
+
+;;;###autoload
+(defun textui-attach-widget (widget from to)
+  "Attach block WIDGET to existing text between FROM and TO.
+WIDGET must define a `:textui-attach' function accepting WIDGET, FROM, and TO.
+The callback must leave the plain text unchanged, set `:from' and `:to' to
+markers spanning exactly the same non-empty region in the current buffer, and
+set `:delete' to a function.  Return WIDGET.  This standalone API does not
+require `textui-mode'."
+  (unless (and (integer-or-marker-p from)
+               (integer-or-marker-p to)
+               (or (integerp from)
+                   (eq (marker-buffer from) (current-buffer)))
+               (or (integerp to)
+                   (eq (marker-buffer to) (current-buffer)))
+               (<= (point-min) from to (point-max))
+               (< from to))
+    (error "Invalid widget attachment bounds: %S %S" from to))
+  (let ((attach (widget-get widget :textui-attach))
+        (text (buffer-substring-no-properties from to)))
+    (unless (functionp attach)
+      (error "Widget :textui-attach is not a function: %S" attach))
+    (funcall attach widget from to)
+    (let ((widget-from (widget-get widget :from))
+          (widget-to (widget-get widget :to))
+          (delete (widget-get widget :delete)))
+      (unless (and (markerp widget-from)
+                   (markerp widget-to)
+                   (eq (marker-buffer widget-from) (current-buffer))
+                   (eq (marker-buffer widget-to) (current-buffer))
+                   (= widget-from from)
+                   (= widget-to to))
+        (error "Widget :textui-attach returned invalid bounds: %S" widget))
+      (unless (functionp delete)
+        (error "Widget :textui-attach returned invalid :delete: %S" delete))
+      (unless (equal text
+                     (buffer-substring-no-properties widget-from widget-to))
+        (error "Widget :textui-attach changed its rendered text: %S" widget)))
+    widget))
+
 (defun textui--measure-native (element)
   "Measure native widget ELEMENT and return its placeholder text.
 Use its optional `:textui-measure' function without creating it."
   (let* ((widget (apply #'widget-convert (plist-get element :type)
                         (textui--widget-args element)))
          (measure (widget-get widget :textui-measure))
-         (location-id
-          (when (integerp textui--next-location-id)
-            (prog1 textui--next-location-id
-              (setq textui--next-location-id
-                    (1+ textui--next-location-id)))))
+         (location-id (textui--allocate-location-id))
          (text
           (if measure
               (progn
@@ -409,25 +472,55 @@ Use its optional `:textui-measure' function without creating it."
      text)
     text))
 
+(defun textui--native-layout-function (element)
+  "Return ELEMENT's optional width-aware block layout function."
+  (let ((widget (apply #'widget-convert (plist-get element :type)
+                       (textui--widget-args element))))
+    (widget-get widget :textui-layout)))
+
+(defun textui--native-attach-function (element)
+  "Return ELEMENT's optional existing-text attachment function."
+  (let ((widget (apply #'widget-convert (plist-get element :type)
+                       (textui--widget-args element))))
+    (widget-get widget :textui-attach)))
+
 (defun textui--sum (numbers)
   "Return the sum of NUMBERS."
   (let ((sum 0))
     (dolist (number numbers sum)
       (setq sum (+ sum number)))))
 
-(defun textui--make-spec (element)
-  "Measure normalized ELEMENT and return its internal layout specification."
+(defun textui--make-spec (element &optional nested)
+  "Measure normalized ELEMENT and return its internal layout specification.
+NESTED is non-nil when ELEMENT belongs to a flex or grid container."
   (let* ((type (plist-get element :type))
          (native (not (keywordp type)))
          (layout (textui--validate-layout-options element native))
          (declared (plist-get layout :width))
          (grow (or (plist-get layout :grow) 0)))
     (if native
-        (let* ((placeholder (textui--measure-native element))
-               (natural (string-width placeholder))
-               (start (max natural (or declared 0))))
-          (list :kind :native :element element :placeholder placeholder
-                :natural natural :start start :minimum natural :grow grow))
+        (if-let* ((layout-function
+                   (textui--native-layout-function element)))
+            (progn
+              (when nested
+                (error "Block widgets must be top-level frame elements: %S"
+                       element))
+              (unless (functionp layout-function)
+                (error "Widget :textui-layout is not a function: %S"
+                       layout-function))
+              (unless (functionp (textui--native-attach-function element))
+                (error "Block widget :textui-attach is not a function: %S"
+                       element))
+              (let ((start (max 1 (or declared 1))))
+                (list :kind :native-block :element element
+                      :location-id (textui--allocate-location-id)
+                      :layout-function layout-function
+                      :natural start :start start :minimum 1 :grow grow)))
+          (let* ((placeholder (textui--measure-native element))
+                 (natural (string-width placeholder))
+                 (start (max natural (or declared 0))))
+            (list :kind :native :element element :placeholder placeholder
+                  :natural natural :start start :minimum natural :grow grow)))
       (if (memq type '(:text :image))
           (let* ((value (if (eq type :text)
                             (plist-get element :value)
@@ -456,7 +549,8 @@ Use its optional `:textui-measure' function without creating it."
               (when (integerp textui--next-layout-id)
                 (prog1 textui--next-layout-id
                   (setq textui--next-layout-id (1+ textui--next-layout-id)))))
-             (children (mapcar #'textui--make-spec
+             (children (mapcar (lambda (child)
+                                 (textui--make-spec child t))
                                (plist-get element :children)))
              (gap (if (textui--plist-member-p element :gap)
                       (plist-get element :gap)
@@ -1147,11 +1241,26 @@ available without showing alternative text outside the actual image slice."
     (textui--render-layout-box
      element content width (plist-get spec :location-id))))
 
+(defun textui--render-native-block-spec (spec width)
+  "Render width-aware native block widget SPEC inside WIDTH."
+  (let* ((element (plist-get spec :element))
+         (widget (apply #'widget-convert (plist-get element :type)
+                        (textui--widget-args element)))
+         (text (textui-layout-widget widget width)))
+    (setq text (copy-sequence text))
+    (add-text-properties
+     0 (length text)
+     (list 'textui--placeholder element
+           'textui--location-id (plist-get spec :location-id))
+     text)
+    (list text)))
+
 (defun textui--render-spec (spec width)
   "Render SPEC inside WIDTH and return a list of attributed lines."
   (let* ((lines
           (pcase (plist-get spec :kind)
             (:native (textui--render-native-spec spec width))
+            (:native-block (textui--render-native-block-spec spec width))
             (:text (textui--render-text-spec spec width))
             (:image (textui--render-image-spec spec width))
             (:flex (textui--render-flex-spec spec width))
@@ -1369,20 +1478,8 @@ Keep existing widget and focus records when APPEND is non-nil."
                  result)))))
         (if attach
             (progn
-              (unless (functionp attach)
-                (error "Widget :textui-attach is not a function: %S" attach))
-              (funcall attach widget from to)
-              (let ((widget-from (widget-get widget :from))
-                    (widget-to (widget-get widget :to)))
-                (unless (and (markerp widget-from)
-                             (markerp widget-to)
-                             (eq (marker-buffer widget-from) buffer)
-                             (eq (marker-buffer widget-to) buffer)
-                             (= widget-from from)
-                             (= widget-to to))
-                  (error "Widget :textui-attach returned invalid bounds: %S"
-                         element))
-                (goto-char widget-to)))
+              (textui-attach-widget widget from to)
+              (goto-char (widget-get widget :to)))
           (delete-region from to)
           (goto-char from)
           (widget-apply widget :create))
@@ -1392,10 +1489,12 @@ Keep existing widget and focus records when APPEND is non-nil."
           (textui--compensate-image-runs
            (widget-get widget :from) (widget-get widget :to))
           (push widget textui--widgets)
-          (let ((actual (buffer-substring-no-properties from actual-end)))
-            (when (or (string-match-p "\n" actual)
-                      (/= expected-width (string-width actual)))
-              (error "Measured and real widget output differs: %S" element)))
+          (unless (widget-get widget :textui-layout)
+            (let ((actual (buffer-substring-no-properties from actual-end)))
+              (when (or (string-match-p "\n" actual)
+                        (/= expected-width (string-width actual)))
+                (error "Measured and real widget output differs: %S"
+                       element))))
           (let ((focus-id (textui--focus-id element)))
             (when focus-id
               (when (assoc focus-id textui--focus-anchors)

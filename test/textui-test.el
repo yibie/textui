@@ -34,6 +34,62 @@
   :format "%v"
   :size 6)
 
+(defun textui-test--block-layout (_widget width)
+  "Return two lines whose width is the allocated WIDTH."
+  (let ((line (make-string width ?x)))
+    (concat line "\n" line)))
+
+(defun textui-test--block-attach (widget from to)
+  "Attach test block WIDGET between FROM and TO."
+  (widget-put widget :from (copy-marker from t))
+  (widget-put widget :to (copy-marker to nil))
+  (widget-put widget :delete #'widget-leave-text))
+
+(defun textui-test--single-line-block-layout (_widget _width)
+  "Return invalid single-line block widget output."
+  "one line")
+
+(defun textui-test--changing-block-attach (widget from to)
+  "Attach test block WIDGET between FROM and TO after changing its text."
+  (delete-region from to)
+  (goto-char from)
+  (insert "changed")
+  (widget-put widget :from (copy-marker from t))
+  (widget-put widget :to (copy-marker (point) nil))
+  (widget-put widget :delete #'widget-leave-text))
+
+(defun textui-test--missing-delete-block-attach (widget from to)
+  "Attach test block WIDGET between FROM and TO without a delete function."
+  (widget-put widget :from (copy-marker from t))
+  (widget-put widget :to (copy-marker to nil)))
+
+(define-widget 'textui-test-block-widget 'default
+  "Width-aware multiline widget used by TextUI tests."
+  :format "%v"
+  :keymap widget-keymap
+  :textui-layout #'textui-test--block-layout
+  :textui-attach #'textui-test--block-attach)
+
+(define-widget 'textui-test-single-line-block-widget 'default
+  "Invalid block widget used by TextUI tests."
+  :textui-layout #'textui-test--single-line-block-layout
+  :textui-attach #'textui-test--block-attach)
+
+(define-widget 'textui-test-missing-attach-block-widget 'default
+  "Block widget without an attachment callback used by TextUI tests."
+  :textui-layout #'textui-test--block-layout)
+
+(define-widget 'textui-test-changing-block-widget 'default
+  "Text-changing block widget used by TextUI tests."
+  :textui-layout #'textui-test--block-layout
+  :textui-attach #'textui-test--changing-block-attach)
+
+(define-widget 'textui-test-missing-delete-block-widget 'default
+  "Incomplete block widget used by TextUI tests."
+  :textui-layout #'textui-test--block-layout
+  :delete nil
+  :textui-attach #'textui-test--missing-delete-block-attach)
+
 (defun textui-test--spec (kind start minimum &optional grow)
   "Return a test spec with KIND, START, MINIMUM, and optional GROW."
   (list :kind kind :start start :minimum minimum :grow (or grow 0)))
@@ -297,6 +353,88 @@
   (should-error
    (textui--render-frame
     '((:type item :format "%v" :value "one\ntwo")) 20)))
+
+(ert-deftest textui-block-widget-layout-receives-allocated-width ()
+  (should (equal (textui--render-frame
+                  '((:type textui-test-block-widget)) 5)
+                 "xxxxx\nxxxxx"))
+  (should (equal (textui--render-frame
+                  '((:type textui-test-block-widget)) 9)
+                 "xxxxxxxxx\nxxxxxxxxx")))
+
+(ert-deftest textui-layout-widget-is-standalone ()
+  (with-temp-buffer
+    (let ((widget (widget-convert 'textui-test-block-widget)))
+      (should (equal (textui-layout-widget widget 4) "xxxx\nxxxx"))
+      (should-not (derived-mode-p 'textui-mode)))))
+
+(ert-deftest textui-layout-widget-requires-multiline-output ()
+  (let ((widget (widget-convert 'textui-test-single-line-block-widget)))
+    (should-error (textui-layout-widget widget 10))))
+
+(ert-deftest textui-attach-widget-is-standalone ()
+  (with-temp-buffer
+    (insert "left\nright")
+    (let* ((widget (widget-convert 'textui-test-block-widget))
+           (attached (textui-attach-widget widget (point-min) (point-max))))
+      (should (eq attached widget))
+      (should (= (widget-get widget :from) (point-min)))
+      (should (= (widget-get widget :to) (point-max)))
+      (should (functionp (widget-get widget :delete)))
+      (should-not (derived-mode-p 'textui-mode)))))
+
+(ert-deftest textui-attach-widget-rejects-missing-delete-function ()
+  (with-temp-buffer
+    (insert "left\nright")
+    (should-error
+     (textui-attach-widget
+      (widget-convert 'textui-test-missing-delete-block-widget)
+      (point-min) (point-max)))))
+
+(ert-deftest textui-attach-widget-rejects-text-changes ()
+  (with-temp-buffer
+    (insert "left\nright")
+    (should-error
+     (textui-attach-widget
+      (widget-convert 'textui-test-changing-block-widget)
+      (point-min) (point-max)))))
+
+(ert-deftest textui-block-widget-location-ids-match-native-ordering ()
+  (let* ((specs (textui--prepare-frame
+                 '((:type textui-test-block-widget)
+                   (:type item :format "%v" :value "native"))))
+         (ids (mapcar (lambda (spec) (plist-get spec :location-id)) specs)))
+    (should (equal ids '(0 nil)))
+    (should (= (get-text-property
+                0 'textui--location-id
+                (plist-get (cadr specs) :placeholder))
+               1))))
+
+(ert-deftest textui-block-widget-is-top-level-only ()
+  (should-error
+   (textui--render-frame
+    '((:type :flex :direction :column
+       :children ((:type textui-test-block-widget))))
+    20)))
+
+(ert-deftest textui-block-widget-requires-attach-callback ()
+  (should-error
+   (textui--render-frame
+    '((:type textui-test-missing-attach-block-widget))
+    20)))
+
+(ert-deftest textui-block-widget-materializes-as-one-widget ()
+  (with-temp-buffer
+    (textui-mode)
+    (let ((rendered (textui--render-frame
+                     '((:type textui-test-block-widget)) 7)))
+      (insert rendered)
+      (textui--materialize-placeholders (current-buffer))
+      (should (= (length textui--widgets) 1))
+      (let ((widget (car textui--widgets)))
+        (should (= (widget-get widget :from) (point-min)))
+        (should (= (widget-get widget :to) (point-max)))
+        (should (equal (buffer-string) "xxxxxxx\nxxxxxxx"))))))
 
 (ert-deftest textui-text-leaf-reflows-at-its-assigned-width ()
   (let ((frame
