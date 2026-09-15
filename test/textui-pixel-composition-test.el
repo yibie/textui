@@ -125,6 +125,37 @@ offset is the rendered right edge or left edge of the surrounding card."
              (delete-dups
               (mapcar (lambda (line) (nth index line)) offsets))))))))
 
+(defun textui-pixel-test--gap-grid ()
+  "Return four probe cards in one grid with separate axis gaps."
+  (list :type :grid :columns 2 :min-column-width 40
+        :column-gap 5 :row-gap 2
+        :layout '(:width 100 :min-width 100)
+        :children (list (textui-pixel-test--card)
+                        (textui-pixel-test--card)
+                        (textui-pixel-test--card)
+                        (textui-pixel-test--card))))
+
+(ert-deftest textui-pixel-composition-axis-gaps-keep-edges-exact ()
+  (textui-pixel-test--with-metrics
+    (let* ((lines (split-string
+                   (textui--render-frame (list (textui-pixel-test--gap-grid))
+                                          110)
+                   "\n"))
+           (content (cl-remove-if (lambda (line)
+                                    (string-match-p "\\` *\\'" line))
+                                  lines))
+           (offsets (mapcar #'textui-pixel-test--border-offsets content)))
+      ;; Two grid rows separated by exactly the two `:row-gap' blank lines.
+      (should (= (length content) 28))
+      (should (= (- (length lines) (length content)) 2))
+      ;; A five-cell column gap keeps every card border on the same pixel.
+      (should (cl-every (lambda (line) (= (length line) 4)) offsets))
+      (dotimes (index 4)
+        (should
+         (= 1 (length
+               (delete-dups
+                (mapcar (lambda (line) (nth index line)) offsets)))))))))
+
 (ert-deftest textui-pixel-composition-flex-pair-has-straight-edges ()
   (textui-pixel-test--with-metrics
     (textui-pixel-test--assert-straight-lines

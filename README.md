@@ -252,10 +252,25 @@ Grid places children into equal-width tracks in source order:
  :children (...))
 ```
 
+`:gap` is the shorthand for both axes: it is the number of cells between
+tracks and the number of blank lines between grid rows. Set `:column-gap` and
+`:row-gap` to different values when a card grid needs wide tracks and tight
+rows; an axis-specific property overrides `:gap` for its own axis, and an axis
+without either property keeps the default of one cell:
+
+```elisp
+(:type :grid
+ :columns 3
+ :min-column-width 20
+ :column-gap 3
+ :row-gap 1
+ :children (...))
+```
+
 `:columns` is the maximum column count. As the window narrows, Grid uses fewer
-columns before crossing `:min-column-width`. Each row takes the height of its
-tallest cell. TextUI v1 does not provide explicit track expressions or row and
-column spans.
+columns before crossing `:min-column-width`; the column count and the track
+shares both use `:column-gap`. Each row takes the height of its tallest cell.
+TextUI v1 does not provide explicit track expressions or row and column spans.
 
 Flex and Grid allocate in character cells, but a glyph's advance on a
 graphical frame is not always `char-width` times the frame's cell width. Each

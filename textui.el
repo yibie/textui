@@ -261,12 +261,31 @@ PROPERTIES lists every accepted property."
   "Validate the TextUI grid ELEMENT."
   (textui--validate-layout-container
    element :grid
-   '(:type :columns :min-column-width :gap :padding :border
-     :children :layout))
+   '(:type :columns :min-column-width :gap :column-gap :row-gap :padding
+     :border :children :layout))
   (dolist (property '(:columns :min-column-width))
     (let ((value (plist-get element property)))
       (unless (and (integerp value) (> value 0))
-        (error "%S must be a positive integer: %S" property value)))))
+        (error "%S must be a positive integer: %S" property value))))
+  (dolist (property '(:column-gap :row-gap))
+    (when (textui--plist-member-p element property)
+      (let ((value (plist-get element property)))
+        (unless (and (integerp value) (>= value 0))
+          (error "%S must be a non-negative integer: %S" property value))))))
+
+(defun textui--grid-gaps (element)
+  "Return ELEMENT's (COLUMN-GAP . ROW-GAP) in cells.
+`:gap' is the shorthand for both axes.  `:column-gap' and `:row-gap' override
+it for their own axis; an axis without either property defaults to one cell."
+  (let ((gap (if (textui--plist-member-p element :gap)
+                 (plist-get element :gap)
+               1)))
+    (cons (if (textui--plist-member-p element :column-gap)
+              (plist-get element :column-gap)
+            gap)
+          (if (textui--plist-member-p element :row-gap)
+              (plist-get element :row-gap)
+            gap))))
 
 (defun textui--validate-text (element)
   "Validate the width-aware TextUI text ELEMENT."
@@ -561,6 +580,7 @@ NESTED is non-nil when ELEMENT belongs to a flex or grid container."
               (cond
                ((eq type :grid)
                 (let* ((columns (plist-get element :columns))
+                       (column-gap (car (textui--grid-gaps element)))
                        (track-width
                         (max
                          (plist-get element :min-column-width)
@@ -571,7 +591,7 @@ NESTED is non-nil when ELEMENT belongs to a flex or grid container."
                                             children))
                            0))))
                   (+ (* columns track-width)
-                     (* gap (max 0 (1- columns))))))
+                     (* column-gap (max 0 (1- columns))))))
                ((eq (plist-get element :direction) :row)
                 (+ (textui--sum (mapcar (lambda (child)
                                           (plist-get child :start))
@@ -1237,7 +1257,7 @@ after it."
 
 (defun textui--grid-column-count (element width)
   "Return responsive column count for grid ELEMENT inside WIDTH."
-  (let ((gap (or (plist-get element :gap) 1))
+  (let ((gap (car (textui--grid-gaps element)))
         (minimum (plist-get element :min-column-width)))
     (max 1
          (min (plist-get element :columns)
@@ -1253,14 +1273,15 @@ after it."
         (setq values (nthcdr size values))))
     (nreverse groups)))
 
-(defun textui--render-grid-content (spec width gap)
-  "Render equal-track grid SPEC inside WIDTH using GAP."
+(defun textui--render-grid-content (spec width column-gap row-gap)
+  "Render equal-track grid SPEC inside WIDTH.
+COLUMN-GAP cells separate tracks and ROW-GAP blank lines separate grid rows."
   (let ((children (plist-get spec :children)))
     (if (null children)
         (list "")
       (let* ((element (plist-get spec :element))
              (columns (textui--grid-column-count element width))
-             (available (max 0 (- width (* gap (1- columns)))))
+             (available (max 0 (- width (* column-gap (1- columns)))))
              (widths (textui--proportional-shares
                       available (make-list columns 1)))
              block-rows
@@ -1281,12 +1302,12 @@ after it."
           (setq first t)
           (dolist (blocks (nreverse block-rows))
             (unless first
-              (dotimes (_ gap)
+              (dotimes (_ row-gap)
                 (push "" lines)))
             (setq first nil)
             (dolist (line
                      (textui--compose-row-blocks
-                      blocks actual-widths gap))
+                      blocks actual-widths column-gap))
               (push line lines)))
           (nreverse lines))))))
 
@@ -1385,12 +1406,11 @@ advance by exactly one cell."
   (let* ((element (plist-get spec :element))
          (padding (or (plist-get element :padding) 0))
          (border (and (plist-get element :border) t))
-         (gap (if (textui--plist-member-p element :gap)
-                  (plist-get element :gap)
-                1))
+         (gaps (textui--grid-gaps element))
          (inner-width
           (max 0 (- width (* 2 padding) (if border 2 0))))
-         (content (textui--render-grid-content spec inner-width gap)))
+         (content (textui--render-grid-content
+                   spec inner-width (car gaps) (cdr gaps))))
     (textui--render-layout-box
      element content width (plist-get spec :location-id))))
 

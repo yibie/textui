@@ -5,6 +5,15 @@ calendar date.
 
 ## Unreleased
 
+### Added
+
+- Add separate `:column-gap` and `:row-gap` to `:grid`. `:column-gap`
+  separates tracks, `:row-gap` inserts blank lines between grid rows, and
+  `:gap` remains the shorthand for both axes. An axis-specific property
+  overrides the shorthand for its own axis, so existing `:gap`-only grids
+  render unchanged. See
+  [ADR 0040](docs/adr/0040-grid-gaps-are-per-axis.md).
+
 ### Changed
 
 - Compose flex and grid rows, and box interiors, borders, rules, and blank

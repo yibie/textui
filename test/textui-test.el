@@ -276,6 +276,129 @@
     (should (string-match-p "\\` *\\'" (nth 2 lines)))
     (should (= (string-match "D" (nth 3 lines)) 11))))
 
+(ert-deftest textui-grid-column-gap-separates-tracks-only ()
+  (let* ((frame
+          '((:type :grid :columns 3 :min-column-width 4 :column-gap 3
+            :children
+            ((:type item :format "%v" :value "A")
+             (:type item :format "%v" :value "B")
+             (:type item :format "%v" :value "C")
+             (:type item :format "%v" :value "D")))))
+         (lines (split-string (textui--render-frame frame 20) "\n")))
+    ;; One blank line between rows: the row gap keeps its default of one.
+    (should (= (length lines) 3))
+    (should (equal (mapcar #'string-width lines) '(20 20 20)))
+    ;; Three cells separate the tracks; the first track keeps its width.
+    (should (= (string-match "B" (nth 0 lines)) 8))
+    (should (= (string-match "C" (nth 0 lines)) 16))
+    (should (string-prefix-p "D" (nth 2 lines)))))
+
+(ert-deftest textui-grid-row-gap-inserts-blank-rows-only ()
+  (let* ((frame
+          '((:type :grid :columns 2 :min-column-width 4 :row-gap 2
+            :children
+            ((:type item :format "%v" :value "A")
+             (:type item :format "%v" :value "B")
+             (:type item :format "%v" :value "C")
+             (:type item :format "%v" :value "D")))))
+         (lines (split-string (textui--render-frame frame 20) "\n")))
+    (should (= (length lines) 4))
+    (should (string-match-p "\\` *\\'" (nth 1 lines)))
+    (should (string-match-p "\\` *\\'" (nth 2 lines)))
+    ;; The column gap keeps its default of one cell.
+    (should (= (string-match "B" (nth 0 lines)) 11))
+    (should (= (string-match "D" (nth 3 lines)) 11))))
+
+(ert-deftest textui-grid-axis-gaps-override-the-gap-shorthand ()
+  (let* ((children
+          (mapcar (lambda (value)
+                    (list :type 'item :format "%v" :value value))
+                  '("A" "B" "C" "D")))
+         (shorthand
+          (list (append '(:type :grid :columns 3 :min-column-width 4
+                          :gap 9 :column-gap 2 :row-gap 3)
+                        (list :children children))))
+         (explicit
+          (list (append '(:type :grid :columns 3 :min-column-width 4
+                          :column-gap 2 :row-gap 3)
+                        (list :children children)))))
+    (should (equal (textui--render-frame shorthand 20)
+                   (textui--render-frame explicit 20)))
+    ;; The shorthand value never leaks into an axis that overrides it.
+    (let ((lines (split-string (textui--render-frame shorthand 20) "\n")))
+      (should (= (length lines) 5))
+      (should (= (string-match "B" (nth 0 lines)) 8))
+      (should (string-match-p "\\` *\\'" (nth 1 lines)))
+      (should (string-match-p "\\` *\\'" (nth 2 lines)))
+      (should (string-match-p "\\` *\\'" (nth 3 lines))))))
+
+(ert-deftest textui-grid-column-gap-controls-responsive-columns ()
+  ;; A three-cell column gap drops the third track at this width; the
+  ;; default one-cell gap keeps it.
+  (should (= (textui--grid-column-count
+              '(:type :grid :columns 3 :min-column-width 6 :column-gap 3)
+              20)
+             2))
+  (should (= (textui--grid-column-count
+              '(:type :grid :columns 3 :min-column-width 6)
+              20)
+             3))
+  (let* ((children
+          (mapcar (lambda (value)
+                    (list :type 'item :format "%v" :value value))
+                  '("A" "B" "C" "D" "E")))
+         (wide (list (append '(:type :grid :columns 3 :min-column-width 6)
+                             (list :children children))))
+         (gapped (list (append '(:type :grid :columns 3 :min-column-width 6
+                                 :column-gap 3)
+                               (list :children children)))))
+    (should (= (length (split-string (textui--render-frame wide 20) "\n"))
+               3))
+    (should (= (length (split-string (textui--render-frame gapped 20) "\n"))
+               5))))
+
+(ert-deftest textui-grid-axis-gaps-are-validated ()
+  (dolist (gap '((:column-gap -1) (:row-gap -1)
+                 (:column-gap 1.5) (:row-gap "1") (:column-gap nil)))
+    (should-error
+     (textui--render-frame
+      (list (append '(:type :grid :columns 2 :min-column-width 4)
+                    gap (list :children nil)))
+      20)))
+  ;; Unknown keys and grid-only keys on flex are still rejected.
+  (should-error
+   (textui--render-frame
+    '((:type :grid :columns 2 :min-column-width 4 :column-space 1
+       :children nil))
+    20))
+  (should-error
+   (textui--render-frame
+    '((:type :flex :direction :row :column-gap 1 :children nil))
+    20)))
+
+(ert-deftest textui-grid-gap-shorthand-keeps-existing-grids-unchanged ()
+  (let* ((children
+          (mapcar (lambda (value)
+                    (list :type 'item :format "%v" :value value))
+                  '("A" "B" "C" "D")))
+         (shorthand
+          (list (append '(:type :grid :columns 3 :min-column-width 4 :gap 2)
+                        (list :children children))))
+         (explicit
+          (list (append '(:type :grid :columns 3 :min-column-width 4
+                          :column-gap 2 :row-gap 2)
+                        (list :children children))))
+         (rendered (textui--render-frame shorthand 20)))
+    ;; `:gap' remains exactly the shorthand for both axes.
+    (should (equal rendered (textui--render-frame explicit 20)))
+    ;; Pinned pre-change rows, so the shorthand cannot drift silently while
+    ;; still matching a second wrong render.
+    (should (equal (mapcar #'substring-no-properties (split-string rendered "\n"))
+                   '("A       B      C    "
+                     "                    "
+                     "                    "
+                     "D                   ")))))
+
 (ert-deftest textui-grid-validates-options-and-keeps-border-box-width ()
   (dolist (frame
            '(((:type :grid :min-column-width 5 :children nil))
