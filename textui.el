@@ -677,13 +677,91 @@ Optional LIMITS caps each returned share."
                           (min overflow capacity) capacities capacities)))
         (cl-mapcar #'- starts reductions))))))
 
+;;;; Pixel metrics
+;;
+;; Composition works in character cells, but a graphical frame's glyph
+;; advances are not always `char-width' times `frame-char-width'.  These
+;; helpers give the composition functions a pixel budget when, and only when,
+;; the frame the buffer is rendered for has pixel geometry.
+
+(defvar textui--pixel-metrics-override nil
+  "Dynamically bound (MEASURE . CELL-WIDTH) overriding display pixel metrics.
+MEASURE takes an attributed string and returns its advance in pixels;
+CELL-WIDTH is the frame's `frame-char-width'.  Tests bind this variable to
+compose rows and boxes without a graphical frame.")
+
+(define-hash-table-test 'textui--attributed-string
+  #'equal-including-properties
+  #'sxhash-equal-including-properties)
+
+(defvar textui--pixel-width-cache nil
+  "Memoized string pixel widths as (GENERATION . HASH-TABLE).
+The table compares attributed strings, so two strings with the same
+characters but different faces or display properties keep separate widths.
+The generation is `textui--text-layout-environment-generation', so theme,
+font, and scale changes discard measured widths exactly like paragraph
+layouts.")
+
+(defun textui--target-frame ()
+  "Return the live frame displaying the current buffer, or the selected frame."
+  (let ((window (get-buffer-window (current-buffer) t)))
+    (if (window-live-p window) (window-frame window) (selected-frame))))
+
+(defun textui--string-pixel-width (string)
+  "Return STRING's advance in pixels for the current display environment.
+Results are memoized until `textui-invalidate-text-layout-cache' records a
+font, theme, or scale change."
+  (let* ((generation textui--text-layout-environment-generation)
+         (table (cdr textui--pixel-width-cache)))
+    (unless (eq (car textui--pixel-width-cache) generation)
+      (setq table (make-hash-table :test 'textui--attributed-string)
+            textui--pixel-width-cache (cons generation table)))
+    (let ((width (gethash string table 'textui--pixel-width-miss)))
+      (if (not (eq width 'textui--pixel-width-miss))
+          width
+        (setq width (string-pixel-width string))
+        (when (>= (hash-table-count table) 4096)
+          (clrhash table))
+        (puthash string width table)
+        width))))
+
+(defun textui--pixel-metrics ()
+  "Return (MEASURE . CELL-WIDTH) for the current render, or nil.
+The result is nil on non-graphical frames and whenever the target frame has
+no pixel geometry, which keeps terminal and batch composition exactly
+column-based."
+  (or textui--pixel-metrics-override
+      (let* ((frame (textui--target-frame))
+             (cell (and (display-graphic-p frame) (frame-char-width frame))))
+        (when (and (integerp cell) (> cell 0))
+          (cons #'textui--string-pixel-width cell)))))
+
+(defun textui--padding-refresh-id (string)
+  "Return STRING's uniform `textui--refresh-id', or nil.
+A complete-line refresh child can be widened later by an outer layout box.
+Keep that layout-owned padding inside the same region; content/source
+properties deliberately remain on STRING."
+  (let ((refresh-id (and (> (length string) 0)
+                         (get-text-property 0 'textui--refresh-id string))))
+    (when (and refresh-id
+               (not (text-property-not-all
+                     0 (length string) 'textui--refresh-id refresh-id string)))
+      refresh-id)))
+
 (defun textui--rendered-string-width (string)
-  "Return STRING's displayed width in TextUI cells."
-  (if (and (> (length string) 0)
-           (text-property-not-all
-            0 (length string) 'textui--pixel-justified nil string))
-      (ceiling (/ (float (string-pixel-width string))
-                  (max 1 (string-pixel-width " "))))
+  "Return STRING's displayed width in TextUI cells.
+On a frame with pixel geometry the width is the measured pixel advance
+divided by the frame cell width, so a glyph whose advance is not a whole
+multiple of a cell still reports every cell it occupies."
+  (if (> (length string) 0)
+      (if-let* ((metrics (textui--pixel-metrics)))
+          (ceiling (/ (float (funcall (car metrics) string))
+                      (cdr metrics)))
+        (if (text-property-not-all
+             0 (length string) 'textui--pixel-justified nil string)
+            (ceiling (/ (float (string-pixel-width string))
+                        (max 1 (string-pixel-width " "))))
+          (string-width string)))
     (string-width string)))
 
 (defun textui--pad-right (string width)
@@ -691,22 +769,45 @@ Optional LIMITS caps each returned share."
   (let ((missing (- width (textui--rendered-string-width string))))
     (if (> missing 0)
         (let* ((padding (make-string missing ?\s))
-               (refresh-id
-                (and (> (length string) 0)
-                     (get-text-property
-                      0 'textui--refresh-id string))))
-          ;; A complete-line refresh child can be widened later by an outer
-          ;; layout box.  Keep that layout-owned padding inside the same
-          ;; region; content/source properties deliberately remain on STRING.
-          (when (and refresh-id
-                     (not (text-property-not-all
-                           0 (length string)
-                           'textui--refresh-id refresh-id string)))
+               (refresh-id (textui--padding-refresh-id string)))
+          (when refresh-id
             (put-text-property
              0 (length padding)
              'textui--refresh-id refresh-id padding))
           (concat string padding))
       string)))
+
+(defun textui--pixel-pad-right (string width)
+  "Pad STRING to WIDTH text cells, exactly in pixels on a graphical frame.
+Whole ordinary spaces fill the budget and one residual `(space :width (N))'
+display spacer covers the remainder, so the rendered edge lands exactly on
+the WIDTH cell boundary.  Without pixel metrics this is `textui--pad-right',
+which keeps terminal and batch output byte-identical."
+  (let ((metrics (textui--pixel-metrics)))
+    (if (null metrics)
+        (textui--pad-right string width)
+      (let* ((measure (car metrics))
+             (cell (cdr metrics))
+             (target (* width cell))
+             (current (funcall measure string)))
+        (if (>= current target)
+            string
+          (let* ((budget (- target current))
+                 (space (max 1 (funcall measure " ")))
+                 (whole (/ budget space))
+                 (residual (% budget space))
+                 (padding
+                  (concat (make-string whole ?\s)
+                          (when (> residual 0)
+                            (propertize " "
+                                        'display `(space :width (,residual))
+                                        'textui--pixel-padding t))))
+                 (refresh-id (textui--padding-refresh-id string)))
+            (when refresh-id
+              (put-text-property
+               0 (length padding)
+               'textui--refresh-id refresh-id padding))
+            (concat string padding)))))))
 
 (defun textui--block-width (lines)
   "Return the widest display width in LINES."
@@ -1046,22 +1147,51 @@ available without showing alternative text outside the actual image slice."
     (put-text-property 0 (length line) 'textui--location-id location-id line)
     (list line)))
 
-(defun textui--compose-row-blocks (blocks widths gap)
-  "Compose rendered BLOCKS at WIDTHS separated by GAP."
+(defun textui--compose-pixel-row-blocks (blocks widths gap)
+  "Compose BLOCKS at WIDTHS separated by GAP from cumulative pixel budgets.
+Each block and each following GAP is padded against the rendered prefix of
+the line, so a glyph that is not a whole cell wide cannot move the blocks
+after it."
   (let ((height 0)
         lines)
     (dolist (block blocks)
       (setq height (max height (length block))))
     (dotimes (line-index height)
-      (let (parts)
+      (let ((line "")
+            (target 0)
+            (first t))
         (cl-mapc
          (lambda (block width)
-           (push (textui--pad-right (or (nth line-index block) "") width)
-                 parts))
+           (unless first
+             (setq target (+ target gap)
+                   line (textui--pixel-pad-right line target)))
+           (setq first nil
+                 target (+ target width)
+                 line (textui--pixel-pad-right
+                       (concat line (or (nth line-index block) ""))
+                       target)))
          blocks widths)
-        (push (mapconcat #'identity (nreverse parts) (make-string gap ?\s))
-              lines)))
+        (push line lines)))
     (nreverse lines)))
+
+(defun textui--compose-row-blocks (blocks widths gap)
+  "Compose rendered BLOCKS at WIDTHS separated by GAP."
+  (if (textui--pixel-metrics)
+      (textui--compose-pixel-row-blocks blocks widths gap)
+    (let ((height 0)
+          lines)
+      (dolist (block blocks)
+        (setq height (max height (length block))))
+      (dotimes (line-index height)
+        (let (parts)
+          (cl-mapc
+           (lambda (block width)
+             (push (textui--pad-right (or (nth line-index block) "") width)
+                   parts))
+           blocks widths)
+          (push (mapconcat #'identity (nreverse parts) (make-string gap ?\s))
+                lines)))
+      (nreverse lines))))
 
 (defun textui--render-row-line-block (row widths gap)
   "Render one allocated ROW using WIDTHS and GAP."
@@ -1178,6 +1308,21 @@ available without showing alternative text outside the actual image slice."
         (setq row (1+ row)))))
   lines)
 
+(defun textui--pixel-box-lines (body body-width)
+  "Return BODY wrapped in borders whose right edge is BODY-WIDTH cells wide.
+The right border is appended after the prefix is padded, so the box stays
+straight even when the rule glyph or a fallback-font content glyph does not
+advance by exactly one cell."
+  (let ((target (1+ body-width))
+        (rule (make-string body-width ?─)))
+    (append
+     (list (concat (textui--pixel-pad-right (concat "┌" rule) target) "┐"))
+     (mapcar (lambda (line)
+               (concat (textui--pixel-pad-right (concat "│" line) target)
+                       "│"))
+             body)
+     (list (concat (textui--pixel-pad-right (concat "└" rule) target) "┘")))))
+
 (defun textui--render-layout-box (element content width location-id)
   "Render ELEMENT's CONTENT inside WIDTH and tag LOCATION-ID."
   (let* ((padding (or (plist-get element :padding) 0))
@@ -1186,25 +1331,33 @@ available without showing alternative text outside the actual image slice."
          (content-width
           (max (max 0 (- width decoration)) (textui--block-width content)))
          (body-width (+ content-width (* 2 padding)))
+         (metrics (textui--pixel-metrics))
          (horizontal-padding (make-string padding ?\s))
          (blank-body (make-string body-width ?\s))
          body)
     (dotimes (_ padding)
       (push blank-body body))
     (dolist (line content)
-      (push (concat horizontal-padding
-                    (textui--pad-right line content-width)
-                    horizontal-padding)
+      (push (if metrics
+                ;; Pad the attributed line to the interior budget; the
+                ;; right padding follows from the border padding below.
+                (textui--pixel-pad-right
+                 (concat horizontal-padding line) body-width)
+              (concat horizontal-padding
+                      (textui--pad-right line content-width)
+                      horizontal-padding))
             body))
     (dotimes (_ padding)
       (push blank-body body))
     (setq body (nreverse body))
     (textui--tag-layout-cells
      (if border
-         (append
-          (list (concat "┌" (make-string body-width ?─) "┐"))
-          (mapcar (lambda (line) (concat "│" line "│")) body)
-          (list (concat "└" (make-string body-width ?─) "┘")))
+         (if metrics
+             (textui--pixel-box-lines body body-width)
+           (append
+            (list (concat "┌" (make-string body-width ?─) "┐"))
+            (mapcar (lambda (line) (concat "│" line "│")) body)
+            (list (concat "└" (make-string body-width ?─) "┘"))))
        body)
      location-id)))
 

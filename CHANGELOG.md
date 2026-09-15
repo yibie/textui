@@ -5,6 +5,25 @@ calendar date.
 
 ## Unreleased
 
+### Changed
+
+- Compose flex and grid rows, and box interiors, borders, rules, and blank
+  padding rows, by pixel budget on graphical frames. Block edges are now
+  pixel-exact on every line regardless of CJK, ambiguous-width, or
+  fallback-font glyph advances. A row can end a fraction of a cell short of
+  its column budget in source characters, because the final partial cell is a
+  display-only spacer. Terminal and batch composition is unchanged. See
+  [ADR 0039](docs/adr/0039-compose-rows-and-boxes-by-pixels-on-graphical-frames.md).
+- Compute natural-width overflow in pixels on graphical frames, so a block
+  wider than its allocation grows the track by the cells it really occupies.
+
+### Fixed
+
+- Hold every card and box edge on the same pixel across lines. The stock
+  composition measured by the bordered-card probe drifted 24px and 48px; it
+  now holds both edges at 0px spread. See
+  [`docs/report-pixel-composition.md`](docs/report-pixel-composition.md).
+
 ## [0.8.0] - 2026-09-06
 
 ### Added

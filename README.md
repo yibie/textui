@@ -257,6 +257,17 @@ columns before crossing `:min-column-width`. Each row takes the height of its
 tallest cell. TextUI v1 does not provide explicit track expressions or row and
 column spans.
 
+Flex and Grid allocate in character cells, but a glyph's advance on a
+graphical frame is not always `char-width` times the frame's cell width. Each
+track is padded from its rendered pixel prefix, so block, card, and border
+edges are pixel-exact on graphical frames regardless of CJK,
+ambiguous-width, or fallback-font glyphs. The trade-off is that the last
+partial cell is filled by a display-only spacer: it adds no source
+characters, so a row can report a fraction of a cell less than its column
+budget to code that counts characters. Terminal and batch rendering keeps
+composing in columns and is unchanged. See
+[ADR 0039](docs/adr/0039-compose-rows-and-boxes-by-pixels-on-graphical-frames.md).
+
 ### Reflowing text
 
 Use `:text` for prose that must wrap. A native `item` remains one atomic line.
@@ -739,6 +750,7 @@ emacs -Q --batch -L . -L examples -L test \
   -l test/textui-widget-compatibility-test.el \
   -l test/textui-tui-app-test.el \
   -l test/textui-widgets-test.el \
+  -l test/textui-pixel-composition-test.el \
   -f ert-run-tests-batch-and-exit
 ```
 
