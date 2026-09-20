@@ -755,10 +755,51 @@ a top-level frame element.  Embedding block widgets inside flex or grid is not
 part of this API.  Ordinary native widgets keep the existing single-line
 measurement and materialization contract.
 
+### The layout core
+
+`textui-layout.el` holds the geometry behind `:flex` and `:grid` as pure
+functions over width constraints.  It requires only `cl-lib`, never measures,
+and never touches a buffer, a widget, or a text property: you measure your own
+content, hand in the numbers, and get widths or placements back.  Its
+Commentary is the contract, including the spec and placement vocabularies and
+the semantics of each rule.  (`textui-layout-widget` above is the block-widget
+protocol, not part of this core.)
+
+| Function                                                | Purpose                                                          |
+|----------------------------------------------------------|------------------------------------------------------------------|
+| `(textui-layout-solve SPECS WIDTH GAP)`                  | Lay a row out and return a placement per child                   |
+| `(textui-layout-grid COUNT WIDTH GAP COLUMNS MINIMUM)`   | Lay an equal-track grid out and return a placement per child     |
+| `(textui-layout-partition SPECS WIDTH GAP)`              | Split children into rows at their minimum widths                 |
+| `(textui-layout-allocate SPECS WIDTH GAP)`               | Grow or shrink one row into its available width                  |
+| `(textui-layout-shares AMOUNT WEIGHTS &optional LIMITS)` | Split an integer amount in proportion to weights                 |
+| `(textui-layout-grid-columns COLUMNS MINIMUM WIDTH GAP)` | Choose the responsive column count for a width                   |
+| `(textui-layout-grid-tracks COUNT WIDTH GAP)`            | Split a width into equal integer tracks                          |
+| `(textui-layout-columns WIDTHS RENDERED)`                | Widen assignments that a rendered block overflowed               |
+
+A spec constrains one child: `:start` is its preferred width, `:minimum` the
+floor it may shrink to, `:grow` its weight for surplus width, and `:rigid`
+marks content that cannot be re-rendered narrower.  Unknown keys are ignored.
+A placement is `(:row R :column C :width W)`, in source order.
+
+```elisp
+(textui-layout-solve '((:start 10 :minimum 4 :grow 1)
+                       (:start 10 :minimum 8))
+                     15 1)
+;; => ((:row 0 :column 0 :width 5) (:row 0 :column 1 :width 9))
+```
+
+The contract itself is also available as data.
+[`test/textui-layout-conformance-cases.el`](test/textui-layout-conformance-cases.el)
+lists layout cases and their required geometry in a vocabulary that belongs to
+no engine, requires nothing, and names no package, so another layout
+implementation can load it and check itself against the same expectations
+TextUI checks itself against.
+
 ## Run the tests
 
 ```sh
 emacs -Q --batch -L . -L examples -L test \
+  -l test/textui-layout-test.el \
   -l test/textui-test.el \
   -l test/textui-keyed-region-test.el \
   -l test/textui-grid-gallery-test.el \

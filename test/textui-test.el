@@ -91,8 +91,11 @@
   :textui-attach #'textui-test--missing-delete-block-attach)
 
 (defun textui-test--spec (kind start minimum &optional grow)
-  "Return a test spec with KIND, START, MINIMUM, and optional GROW."
-  (list :kind kind :start start :minimum minimum :grow (or grow 0)))
+  "Return a test spec with KIND, START, MINIMUM, and optional GROW.
+A `:native' spec is rigid, as `textui--make-spec' makes it: allocation may
+not press a native control below its own measurement."
+  (list :kind kind :start start :minimum minimum :grow (or grow 0)
+        :rigid (eq kind :native)))
 
 (defun textui-test--trimmed-lines (string)
   "Return STRING split into lines with trailing spaces removed."

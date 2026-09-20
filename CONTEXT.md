@@ -42,6 +42,21 @@ The part of TextUI that measures and arranges interface elements within the
 available width. It is the package's primary capability.
 _Avoid_: Widget library, component library
 
+**Layout core**:
+The geometry inside the layout engine, published as `textui-layout-*` in
+`textui-layout.el`. It is pure arithmetic over constraints: it never measures,
+and it never sees a buffer, a widget, a marker, or a text property. Callers
+measure their own content, hand in widths, and receive widths or placements
+back. Measurement, rendering, padding, and refresh ownership stay in the
+engine around it.
+_Avoid_: Layout library, renderer
+
+**Placement**:
+One child's position and assigned width, as `(:row R :column C :width W)`, in
+source order. A placement is the layout core's answer for a child; it is not a
+rendered block and carries no content.
+_Avoid_: Box, rect, geometry object
+
 **Flex layout**:
 A one-direction layout that arranges children in a row or column and adapts them
 to the available width. One `:flex` element selects `:row` or `:column` with its
