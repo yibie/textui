@@ -7,6 +7,19 @@ calendar date.
 
 ### Added
 
+- Publish TextUI's layout geometry as `textui-layout-*` in the new
+  `textui-layout.el`. `textui-layout-solve` and `textui-layout-grid` lay a row
+  or a grid out and return one placement, `(:row R :column C :width W)`, per
+  child; `textui-layout-shares`, `-partition`, `-allocate`, `-grid-columns`,
+  `-grid-tracks` and `-columns` expose the individual steps. The file is pure
+  arithmetic over width constraints: it requires only `cl-lib`, never
+  measures, and never touches a buffer, a widget, or a text property. Its
+  Commentary carries the contract. See
+  [ADR 0041](docs/adr/0041-the-layout-core-is-public-and-runtime-free.md).
+- Add `test/textui-layout-conformance-cases.el`, the layout contract as
+  engine-neutral data, and `test/textui-layout-test.el`, which runs it against
+  TextUI. Another layout implementation can load the cases file unchanged and
+  check itself against the same expectations.
 - Add separate `:column-gap` and `:row-gap` to `:grid`. `:column-gap`
   separates tracks, `:row-gap` inserts blank lines between grid rows, and
   `:gap` remains the shorthand for both axes. An axis-specific property
@@ -16,6 +29,14 @@ calendar date.
 
 ### Changed
 
+- Distribute proportional shares with a linear walk instead of indexing into
+  the weight list, which was quadratic in the number of children in a row and
+  ran on every re-render of every shrinking row. The grid renderer's per-track
+  maximum loses its indexed loop for the same reason. Allocation results are
+  unchanged.
+- Derive rigidity from a spec's `:rigid` flag rather than from its element
+  kind, so allocation no longer needs to know what a native widget is. Native
+  controls are marked rigid where they are measured; behaviour is unchanged.
 - Compose flex and grid rows, and box interiors, borders, rules, and blank
   padding rows, by pixel budget on graphical frames. Block edges are now
   pixel-exact on every line regardless of CJK, ambiguous-width, or
@@ -25,6 +46,14 @@ calendar date.
   [ADR 0039](docs/adr/0039-compose-rows-and-boxes-by-pixels-on-graphical-frames.md).
 - Compute natural-width overflow in pixels on graphical frames, so a block
   wider than its allocation grows the track by the cells it really occupies.
+
+### Deprecated
+
+- `textui--partition-row`, `textui--allocate-row` and
+  `textui--proportional-shares` are obsolete aliases for
+  `textui-layout-partition`, `textui-layout-allocate` and
+  `textui-layout-shares`. They keep working for now, including for code that
+  pinned the private spellings.
 
 ### Fixed
 

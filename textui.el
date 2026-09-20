@@ -56,6 +56,7 @@
 (require 'cl-lib)
 (require 'image)
 (require 'subr-x)
+(require 'textui-layout)
 (require 'wid-edit)
 
 (defvar textui--expanders nil
@@ -538,8 +539,11 @@ NESTED is non-nil when ELEMENT belongs to a flex or grid container."
           (let* ((placeholder (textui--measure-native element))
                  (natural (string-width placeholder))
                  (start (max natural (or declared 0))))
+            ;; A native control renders at one width, so allocation may not
+            ;; press it below its own measurement: it is rigid.
             (list :kind :native :element element :placeholder placeholder
-                  :natural natural :start start :minimum natural :grow grow)))
+                  :natural natural :start start :minimum natural :grow grow
+                  :rigid t)))
       (if (memq type '(:text :image))
           (let* ((value (if (eq type :text)
                             (plist-get element :value)
@@ -619,83 +623,17 @@ NESTED is non-nil when ELEMENT belongs to a flex or grid container."
         (textui--next-layout-id (unless omit-location-ids 0)))
     (mapcar #'textui--make-spec (textui--expand-elements frame nil))))
 
-(defun textui--partition-row (children width gap)
-  "Partition CHILDREN into ordered rows fitting WIDTH at minima and GAP."
-  (let ((available (max 0 width))
-        current
-        (current-width 0)
-        rows)
-    (dolist (child children)
-      (let* ((minimum (plist-get child :minimum))
-             (joined (+ current-width (if current gap 0) minimum)))
-        (if (or (null current) (<= joined available))
-            (progn
-              (push child current)
-              (setq current-width joined))
-          (push (nreverse current) rows)
-          (setq current (list child)
-                current-width minimum))))
-    (when current
-      (push (nreverse current) rows))
-    (nreverse rows)))
+;; The pure geometry behind these containers lives in `textui-layout'.  These
+;; aliases keep the previous private spellings working for code that already
+;; calls them, including the cross-engine conformance harness in
+;; https://github.com/yibie/textui/issues/1.
 
-(defun textui--proportional-shares (amount weights &optional limits)
-  "Split integer AMOUNT in proportion to WEIGHTS.
-Optional LIMITS caps each returned share."
-  (let* ((count (length weights))
-         (total (float (textui--sum weights)))
-         (shares (make-list count 0))
-         (remaining amount))
-    (when (> total 0)
-      (let ((index 0))
-        (dolist (weight weights)
-          (let* ((raw (floor (* amount (/ (float weight) total))))
-                 (limit (and limits (nth index limits)))
-                 (share (if limit (min raw limit) raw)))
-            (setcar (nthcdr index shares) share)
-            (setq remaining (- remaining share)
-                  index (1+ index)))))
-      (while (> remaining 0)
-        (let ((index 0)
-              progressed)
-          (while (and (< index count) (> remaining 0))
-            (let ((weight (nth index weights))
-                  (limit (and limits (nth index limits)))
-                  (share (nth index shares)))
-              (when (and (> weight 0) (or (null limit) (< share limit)))
-                (setcar (nthcdr index shares) (1+ share))
-                (setq remaining (1- remaining)
-                      progressed t)))
-            (setq index (1+ index)))
-          (unless progressed
-            (setq remaining 0)))))
-    shares))
-
-(defun textui--allocate-row (row width gap)
-  "Return allocated widths for ROW inside WIDTH using GAP."
-  (let* ((count (length row))
-         (available (max 0 (- width (* gap (max 0 (1- count))))))
-         (starts (mapcar (lambda (child) (plist-get child :start)) row))
-         (minimums (mapcar (lambda (child) (plist-get child :minimum)) row))
-         (start-total (textui--sum starts)))
-    (cond
-     ((null row) nil)
-     ((and (= count 1) (> (car minimums) available))
-      (if (eq (plist-get (car row) :kind) :native)
-          (list (car starts))
-        (list available)))
-     ((<= start-total available)
-      (let* ((extra (- available start-total))
-             (weights (mapcar (lambda (child) (plist-get child :grow)) row))
-             (shares (textui--proportional-shares extra weights)))
-        (cl-mapcar #'+ starts shares)))
-     (t
-      (let* ((overflow (- start-total available))
-             (capacities (cl-mapcar #'- starts minimums))
-             (capacity (textui--sum capacities))
-             (reductions (textui--proportional-shares
-                          (min overflow capacity) capacities capacities)))
-        (cl-mapcar #'- starts reductions))))))
+(define-obsolete-function-alias 'textui--partition-row
+  'textui-layout-partition "0.9.0")
+(define-obsolete-function-alias 'textui--allocate-row
+  'textui-layout-allocate "0.9.0")
+(define-obsolete-function-alias 'textui--proportional-shares
+  'textui-layout-shares "0.9.0")
 
 ;;;; Pixel metrics
 ;;
@@ -1215,23 +1153,21 @@ after it."
 
 (defun textui--render-row-line-block (row widths gap)
   "Render one allocated ROW using WIDTHS and GAP."
-  (let ((blocks (cl-mapcar #'textui--render-spec row widths))
-        actual-widths)
-    (setq actual-widths
-          (cl-mapcar (lambda (block assigned)
-                       (max assigned (textui--block-width block)))
-                     blocks widths))
-    (textui--compose-row-blocks blocks actual-widths gap)))
+  (let ((blocks (cl-mapcar #'textui--render-spec row widths)))
+    (textui--compose-row-blocks
+     blocks
+     (textui-layout-columns widths (mapcar #'textui--block-width blocks))
+     gap)))
 
 (defun textui--render-row-content (children width gap)
   "Render row CHILDREN responsively inside WIDTH using GAP."
   (if (null children)
       (list "")
     (let (lines)
-      (dolist (row (textui--partition-row children width gap))
+      (dolist (row (textui-layout-partition children width gap))
         (dolist (line
                  (textui--render-row-line-block
-                  row (textui--allocate-row row width gap) gap))
+                  row (textui-layout-allocate row width gap) gap))
           (push line lines)))
       (nreverse lines))))
 
@@ -1257,11 +1193,10 @@ after it."
 
 (defun textui--grid-column-count (element width)
   "Return responsive column count for grid ELEMENT inside WIDTH."
-  (let ((gap (car (textui--grid-gaps element)))
-        (minimum (plist-get element :min-column-width)))
-    (max 1
-         (min (plist-get element :columns)
-              (/ (+ width gap) (+ minimum gap))))))
+  (textui-layout-grid-columns (plist-get element :columns)
+                              (plist-get element :min-column-width)
+                              width
+                              (car (textui--grid-gaps element))))
 
 (defun textui--partition-fixed (values count)
   "Partition VALUES into source-order groups of at most COUNT."
@@ -1281,9 +1216,7 @@ COLUMN-GAP cells separate tracks and ROW-GAP blank lines separate grid rows."
         (list "")
       (let* ((element (plist-get spec :element))
              (columns (textui--grid-column-count element width))
-             (available (max 0 (- width (* column-gap (1- columns)))))
-             (widths (textui--proportional-shares
-                      available (make-list columns 1)))
+             (widths (textui-layout-grid-tracks columns width column-gap))
              block-rows
              (actual-widths (copy-sequence widths)))
         (dolist (row (textui--partition-fixed children columns))
@@ -1293,10 +1226,10 @@ COLUMN-GAP cells separate tracks and ROW-GAP blank lines separate grid rows."
             (setq blocks
                   (append blocks
                           (make-list (- columns (length blocks)) (list ""))))
-            (dotimes (index columns)
-              (setcar (nthcdr index actual-widths)
-                      (max (nth index actual-widths)
-                           (textui--block-width (nth index blocks)))))
+            ;; A track is as wide as the widest block in it, over every row.
+            (setq actual-widths
+                  (textui-layout-columns
+                   actual-widths (mapcar #'textui--block-width blocks)))
             (push blocks block-rows)))
         (let (lines first)
           (setq first t)
